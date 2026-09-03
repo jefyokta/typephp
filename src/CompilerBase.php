@@ -413,6 +413,7 @@ class CompilerBase implements PropertyAccessContext
     protected array $userIncludePaths = [];  // --include-path / -I: user-provided C++ include dirs
     protected array $userDefines = [];       // --define / -D: user-provided preprocessor macros
     protected bool $enableLto = false;       // --lto: enable Link Time Optimization (-flto)
+    protected bool $fullStatic = false;      // --full-static: link against the bundled fully-static SDK
     protected string $file;
     protected string $dir;
 

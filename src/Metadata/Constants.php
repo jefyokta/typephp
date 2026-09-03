@@ -302,6 +302,12 @@ class Constants
             'required'    => false,
             'multiple'    => true,
         ],
+        'full-static' => [
+            'longPrefix'  => 'full-static',
+            'description' => 'Enable fully-static linking using the bundled SDK (phpx/full-static/sdk)',
+            'required'    => false,
+            'noValue'     => true,
+        ],
     ];
 
     /**

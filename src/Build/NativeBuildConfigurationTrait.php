@@ -11,8 +11,45 @@ use TypePhp\Platform\Windows;
 
 trait NativeBuildConfigurationTrait
 {
+    /**
+     * Resolve the fully-static SDK directory (phpx/full-static/sdk).
+     *
+     * Fully-static builds are self-contained: the SDK bundles libphp.a and
+     * libphpx.a plus every required header, so neither PHP_HOME nor php-config
+     * is consulted. Returns null when fully-static mode is disabled.
+     */
+    protected function getFullStaticSdkDir(): ?string
+    {
+        if (!$this->fullStatic) {
+            return null;
+        }
+        $sdkDir = $this->getPhpxDir() . '/full-static/sdk';
+        if (!is_dir($sdkDir)) {
+            $this->error(
+                '--full-static requires the bundled SDK at phpx/full-static/sdk; not found at: ' . $sdkDir
+            );
+        }
+        return $sdkDir;
+    }
+
     protected function getIncludePaths(): array
     {
+        $sdkDir = $this->getFullStaticSdkDir();
+        if ($sdkDir !== null) {
+            return [
+                $sdkDir . '/include/phpx',
+                $sdkDir . '/include',
+                $sdkDir . '/include/php',
+                $sdkDir . '/include/php/main',
+                $sdkDir . '/include/php/Zend',
+                $sdkDir . '/include/php/TSRM',
+                $sdkDir . '/include/php/ext',
+                $sdkDir . '/include/php/ext/date/lib',
+                $this->getBuildDir() . '/include',
+                $this->getPhpxDir() . '/src/misc',
+            ];
+        }
+
         $platform = $this->getPlatform();
         $includePaths = [
             $this->getPhpxDir() . '/include',
@@ -38,6 +75,11 @@ trait NativeBuildConfigurationTrait
 
     protected function getLibraryPaths(): array
     {
+        $sdkDir = $this->getFullStaticSdkDir();
+        if ($sdkDir !== null) {
+            return [$sdkDir . '/lib'];
+        }
+
         $platform = $this->getPlatform();
         $libraryPaths = [
             $this->getPhpxDir() . '/lib',
@@ -61,6 +103,17 @@ trait NativeBuildConfigurationTrait
      */
     protected function getLibraries(): array
     {
+        $sdkDir = $this->getFullStaticSdkDir();
+        if ($sdkDir !== null) {
+            // Fully-static: both archives are self-contained. libphpx.a comes
+            // first because it references symbols resolved by libphp.a; no
+            // -lgmp/-lgmpxx/-lmpfr or system libc is needed.
+            return [
+                $sdkDir . '/lib/libphpx.a',
+                $sdkDir . '/lib/libphp.a',
+            ];
+        }
+
         $platform = $this->getPlatform();
         $libraries = [];
 
@@ -126,6 +179,12 @@ trait NativeBuildConfigurationTrait
      */
     protected function findPhpxLibrary(): ?string
     {
+        $sdkDir = $this->getFullStaticSdkDir();
+        if ($sdkDir !== null) {
+            $phpxStaticPath = $sdkDir . '/lib/libphpx.a';
+            return is_file($phpxStaticPath) ? $phpxStaticPath : null;
+        }
+
         $platform = $this->getPlatform();
 
         if ($platform instanceof Windows) {
