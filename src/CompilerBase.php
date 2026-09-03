@@ -273,6 +273,7 @@ class CompilerBase implements PropertyAccessContext
     public const string ENTRY_FUNCTION = 'main';
     protected const string PHASE_IDLE = 'idle';
     protected const string PHASE_PREPARE = 'prepare';
+    protected const string PHASE_COMPOSE = 'compose';
     protected const string PHASE_CONVERT = 'convert';
 
     protected string $lang = 'PHP';
@@ -339,6 +340,7 @@ class CompilerBase implements PropertyAccessContext
     protected int $propertyAccessCacheIndex = 0;
     /** @var array<string, array<Node\Stmt>> Prepared declaration ASTs keyed by real path. */
     protected array $preparedFileAsts = [];
+    protected bool $traitDeclarationsComposed = false;
     protected bool $declarationExpressionsFinalized = false;
     protected bool $methodOverrideFlagsFinalized = false;
     protected const array PHP_RUNTIME_TYPE_MAP = [

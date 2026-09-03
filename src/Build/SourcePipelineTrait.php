@@ -154,6 +154,10 @@ trait SourcePipelineTrait
                 }
             }
         }
+        // Trait declarations can only be flattened after the complete source
+        // set has been prepared: a consuming class may precede its Trait file.
+        // Complete the declaration graph before any body is converted.
+        $this->composeTraitDeclarations(array_values($files));
         // Global slots are shared by every translation unit. Fix any Native
         // pointer ABI now, after declarations are known and before the first
         // per-file C++ body is generated.
@@ -253,6 +257,7 @@ trait SourcePipelineTrait
 
     public function convert(array $files): array
     {
+        $this->composeTraitDeclarations($files);
         $previousPhase = $this->enterCompilerPhase(self::PHASE_CONVERT);
         try {
             // All declarations are now known. Lower declaration constant

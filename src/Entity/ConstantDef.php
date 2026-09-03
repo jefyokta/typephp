@@ -18,6 +18,8 @@ class ConstantDef
     public string $value;
     public string $arrayExpr = '';
     public string $class = '';
+    /** Trait whose lexical namespace/import context owns this declaration. */
+    public string $traitOrigin = '';
     public ?NodeAbstract $valueExpr = null;
     /** True after the declaration AST has been lowered to C++ in convert. */
     public bool $codegenFinalized = false;

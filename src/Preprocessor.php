@@ -316,6 +316,7 @@ class Preprocessor extends CompilerBase
             // constants are validated here, but their C++ expressions are not
             // generated until the complete symbol table is available.
             $this->preparedFileAsts[$this->file] = $stmts;
+            $this->traitDeclarationsComposed = false;
             $this->declarationExpressionsFinalized = false;
             // The prepared class graph changed; override flags must be
             // re-finalized before the next conversion.
@@ -349,6 +350,89 @@ class Preprocessor extends CompilerBase
         } finally {
             $this->restoreCompilerPhase($previousPhase);
         }
+    }
+
+    /**
+     * Compose Trait declarations after every source file has been prepared.
+     *
+     * A Trait may be declared after the class that uses it, so composition
+     * cannot be performed safely by prepareFile(). This intermediate phase
+     * runs against the complete declaration graph and makes the composed
+     * method/property/constant signatures visible before any function body is
+     * converted. Expression lowering remains a convert-phase responsibility.
+     *
+     * @param list<string> $files
+     */
+    public function composeTraitDeclarations(array $files): void
+    {
+        if ($this->traitDeclarationsComposed) {
+            return;
+        }
+
+        $previousPhase = $this->enterCompilerPhase(self::PHASE_COMPOSE);
+        try {
+            foreach ($files as $file) {
+                $path = realpath($file);
+                if ($path === false || !isset($this->preparedFileAsts[$path])) {
+                    continue;
+                }
+                $this->loadFile($path);
+                $this->resetFile();
+                $this->resetFunction();
+                $this->resetMethod();
+                $this->resetClass();
+                $this->resetNamespace();
+                $this->composeTraitDeclarationStatementList($this->preparedFileAsts[$path]);
+            }
+            $this->traitDeclarationsComposed = true;
+            // Trait methods are real methods of their consuming classes and
+            // therefore change virtual-dispatch analysis.
+            $this->methodOverrideFlagsFinalized = false;
+        } finally {
+            $this->restoreCompilerPhase($previousPhase);
+        }
+    }
+
+    /** @param array<Node\Stmt> $statements */
+    private function composeTraitDeclarationStatementList(array $statements): void
+    {
+        foreach ($statements as $statement) {
+            if ($statement instanceof Node\Stmt\Namespace_) {
+                $this->resetClass();
+                $this->resetMethod();
+                $this->resetFunction();
+                $this->resetNamespace();
+                $this->namespace = $statement->name ? $this->parseIdentifier($statement->name) : '';
+                $this->composeTraitDeclarationStatementList($statement->stmts);
+                continue;
+            }
+            if ($statement instanceof Node\Stmt\Use_) {
+                $this->parseUse($statement);
+                continue;
+            }
+            if ($statement instanceof Node\Stmt\GroupUse) {
+                $this->parseGroupUse($statement);
+                continue;
+            }
+            if ($statement instanceof Node\Stmt\Class_
+                || $statement instanceof Node\Stmt\Trait_
+                || $statement instanceof Node\Stmt\Enum_
+            ) {
+                $this->resetClass();
+                $this->class = $this->parseIdentifier($statement->name);
+                $this->classDef = $this->getClass($this->getFullClassName());
+                $this->composePreparedTraitDeclarations($statement);
+            }
+        }
+    }
+
+    /**
+     * Translator supplies Trait AST composition; the declaration collector
+     * owns the phase and source/namespace traversal.
+     */
+    protected function composePreparedTraitDeclarations(
+        Node\Stmt\Class_|Node\Stmt\Trait_|Node\Stmt\Enum_ $class,
+    ): void {
     }
 
     protected function fatalPhpParserError(\PhpParser\Error $error): never
@@ -451,7 +535,7 @@ class Preprocessor extends CompilerBase
         }
     }
 
-    private function finalizeClassDeclarationExpressions(
+    protected function finalizeClassDeclarationExpressions(
         Node\Stmt\Class_|Node\Stmt\Trait_|Node\Stmt\Enum_ $class,
     ): void {
         $this->resetClass();
@@ -528,7 +612,7 @@ class Preprocessor extends CompilerBase
         $this->interfaceDef = null;
     }
 
-    private function finalizePreparedFunctionDefaults(
+    protected function finalizePreparedFunctionDefaults(
         Node\Stmt\Function_|Node\Stmt\ClassMethod $function,
         FunctionDef $functionDef,
     ): void {
@@ -546,7 +630,7 @@ class Preprocessor extends CompilerBase
         }
     }
 
-    private function finalizePreparedProperty(PropertyDef $property, Node\Expr $expression): void
+    protected function finalizePreparedProperty(PropertyDef $property, Node\Expr $expression): void
     {
         $this->resetFunction();
         $property->arrayInitPlan = null;
@@ -558,7 +642,7 @@ class Preprocessor extends CompilerBase
         }
     }
 
-    private function finalizePreparedConstant(ConstantDef $constant, Node\Expr $expression): void
+    protected function finalizePreparedConstant(ConstantDef $constant, Node\Expr $expression): void
     {
         $this->resetFunction();
         $constant->arrayExpr = '';

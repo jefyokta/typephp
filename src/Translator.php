@@ -580,6 +580,10 @@ class Translator extends Preprocessor
 
     public function convertFile(string $file): ?string
     {
+        // Public embedding/test callers may prepare files directly instead of
+        // using SourcePipelineTrait::prepare(). Preserve the same explicit
+        // prepare -> Trait composition -> convert ordering for that API.
+        $this->composeTraitDeclarations(array_keys($this->preparedFileAsts));
         $previousPhase = $this->enterCompilerPhase(self::PHASE_CONVERT);
         try {
             if (!$this->declarationExpressionsFinalized) {
@@ -3437,6 +3441,9 @@ CODE;
                         $traitMethods[$methodName] = [$traitFullName, $traitStmt];
                     }
                     if ($traitStmt instanceof Node\Stmt\ClassConst) {
+                        if ($traitStmt->getAttribute(self::TRAIT_ORIGIN_ATTRIBUTE) === null) {
+                            $traitStmt->setAttribute(self::TRAIT_ORIGIN_ATTRIBUTE, $traitFullName);
+                        }
                         foreach ($traitStmt->consts as $k2 => $const) {
                             $constName = strtolower($const->name->toString());
                             if (isset($constants[$constName])) {
@@ -4342,6 +4349,98 @@ CODE;
         $this->resetClass();
 
         return $code;
+    }
+
+    /**
+     * Inject declarations received through Trait composition during the
+     * explicit phase between prepare and convert. At this point every Trait
+     * AST is known, while expression lowering and method-body generation are
+     * still forbidden.
+     */
+    protected function composePreparedTraitDeclarations(
+        Node\Stmt\Class_|Node\Stmt\Trait_|Node\Stmt\Enum_ $class,
+    ): void {
+        if ($class instanceof Node\Stmt\Trait_ || $this->classDef->usedTraits === []) {
+            return;
+        }
+
+        /** @var Node\Stmt\Class_|Node\Stmt\Enum_ $composedClass */
+        $composedClass = $this->cloneAstNode($class);
+        $this->composeTraitAst(
+            $composedClass,
+            new Node\Name($this->classDef->getNamespacedName(false)),
+        );
+        $this->installComposedTraitDataMembers($composedClass);
+
+        foreach ($composedClass->stmts as $statement) {
+            if (!$statement instanceof Node\Stmt\ClassMethod
+                || !is_string($statement->getAttribute(self::TRAIT_ORIGIN_ATTRIBUTE))) {
+                continue;
+            }
+            $origin = (string) $statement->getAttribute(self::TRAIT_ORIGIN_ATTRIBUTE);
+            $this->withTraitNameContext($origin, function () use ($statement): void {
+                $this->installComposedTraitMethod($statement);
+            });
+        }
+
+        $this->resetMethod();
+        $this->resetFunction();
+    }
+
+    /**
+     * Lower only the declaration expressions belonging to members injected in
+     * the preceding Trait-composition phase. Their signatures already exist in
+     * ClassDef; this convert-phase pass does not add declarations or bodies.
+     */
+    protected function finalizeClassDeclarationExpressions(
+        Node\Stmt\Class_|Node\Stmt\Trait_|Node\Stmt\Enum_ $class,
+    ): void {
+        parent::finalizeClassDeclarationExpressions($class);
+
+        if ($class instanceof Node\Stmt\Trait_ || $this->classDef->usedTraits === []) {
+            return;
+        }
+
+        foreach ($this->classDef->constants as $constant) {
+            if ($constant->codegenFinalized
+                || $constant->traitOrigin === ''
+                || !$constant->valueExpr instanceof Node\Expr
+            ) {
+                continue;
+            }
+            $this->withTraitNameContext($constant->traitOrigin, function () use ($constant): void {
+                $this->finalizePreparedConstant($constant, $constant->valueExpr);
+            });
+        }
+
+        foreach ($this->classDef->properties as $property) {
+            $origin = $property->node?->getAttribute(self::TRAIT_ORIGIN_ATTRIBUTE);
+            if (!is_string($origin) || $origin === '' || !$property->defaultExpr instanceof Node\Expr) {
+                continue;
+            }
+            $this->withTraitNameContext($origin, function () use ($property): void {
+                $this->finalizePreparedProperty($property, $property->defaultExpr);
+            });
+        }
+
+        foreach ([$this->classDef->methods, $this->classDef->abstractMethodDefs] as $methods) {
+            foreach ($methods as $method) {
+                if ($method->traitOrigin === ''
+                    || !$method->node instanceof Node\Stmt\ClassMethod
+                    || $method->functionDef === null
+                ) {
+                    continue;
+                }
+                $this->method = $method->name;
+                $this->methodDef = $method;
+                $this->withTraitNameContext($method->traitOrigin, function () use ($method): void {
+                    $this->finalizePreparedFunctionDefaults($method->node, $method->functionDef);
+                });
+            }
+        }
+
+        $this->resetMethod();
+        $this->resetFunction();
     }
 
     protected function genNativeMethod(array $methodCodes): string
@@ -6522,6 +6621,12 @@ CODE;
                 foreach ($stmt->consts as $const) {
                     if (!$this->classDef->hasConstant($const->name->toString())) {
                         $this->parseClassConstDef($stmt);
+                        $origin = $stmt->getAttribute(self::TRAIT_ORIGIN_ATTRIBUTE);
+                        if (is_string($origin)) {
+                            foreach ($stmt->consts as $installedConst) {
+                                $this->classDef->getConstant($installedConst->name->toString())->traitOrigin = $origin;
+                            }
+                        }
                         break;
                     }
                 }
@@ -6547,7 +6652,7 @@ CODE;
     {
         $name = $methodStmt->name->toString();
         $this->assertNativeMagicMethodSupported($methodStmt, $name);
-        if ($this->classDef->hasMethod($name)) {
+        if ($this->classDef->hasMethod($name) || $this->classDef->hasAbstractMethod($name)) {
             return;
         }
 
