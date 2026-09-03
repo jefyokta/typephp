@@ -860,6 +860,57 @@ class Translator extends Preprocessor
         }
     }
 
+    /** @return array{declarations: string, registration: string} */
+    private function genTraitMetadataCode(): array
+    {
+        if ($this->isWasiTarget()) {
+            return ['declarations' => '', 'registration' => ''];
+        }
+
+        $entries = [];
+        foreach ($this->symbols->classes() as $classDef) {
+            $isTrait = $classDef->trait !== null;
+            if (!$isTrait && ($classDef->nativeObject || $classDef->usedTraits === [])) {
+                continue;
+            }
+            $entries[] = [
+                'name' => $classDef->getNamespacedName(false),
+                'traits' => array_values(array_unique($classDef->usedTraits)),
+                'isTrait' => $isTrait,
+            ];
+        }
+        if ($entries === []) {
+            return ['declarations' => '', 'registration' => ''];
+        }
+
+        $code = '// TypePHP compile-time trait-use metadata' . PHP_EOL;
+        foreach ($entries as $index => $entry) {
+            if ($entry['traits'] === []) {
+                continue;
+            }
+            $traits = array_map(
+                fn (string $trait): string => 'std::string_view{"' . $this->escapeString($trait) . '"}',
+                $entry['traits'],
+            );
+            $code .= 'static constexpr std::string_view php_trait_metadata_traits_' . $index . '[] = {'
+                . implode(', ', $traits) . '};' . PHP_EOL;
+        }
+        $code .= 'static constexpr typephp_trait_metadata_entry php_trait_metadata[] = {' . PHP_EOL;
+        foreach ($entries as $index => $entry) {
+            $traitPointer = $entry['traits'] === [] ? 'nullptr' : 'php_trait_metadata_traits_' . $index;
+            $code .= $this->getIndent() . '{std::string_view{"' . $this->escapeString($entry['name']) . '"}, '
+                . $traitPointer . ', ' . count($entry['traits']) . ', '
+                . ($entry['isTrait'] ? 'true' : 'false') . '},' . PHP_EOL;
+        }
+        $code .= '};' . PHP_EOL . PHP_EOL;
+
+        return [
+            'declarations' => $code,
+            'registration' => 'typephp_register_trait_metadata(module_number, php_trait_metadata, '
+                . count($entries) . ')',
+        ];
+    }
+
     private function doGenExtension(): string
     {
         if ($this->isBuildModeBin()) {
@@ -1066,6 +1117,9 @@ CODE;
         }
         $code .= $this->genRequestArrayDefaultInitializers();
 
+        $traitMetadata = $this->genTraitMetadataCode();
+        $code .= $traitMetadata['declarations'];
+
         $code .= "// clang-format off\n";
         $code .= "static const zend_function_entry ext_functions[] = {\n";
         if ($this->isBuildModeBin() && !$this->isWasiTarget()) {
@@ -1116,7 +1170,15 @@ CODE;
             $code .= '}' . PHP_EOL;
         }
         $code .= '// class/interface class entries' . PHP_EOL;
+        if ($traitMetadata['registration'] !== '') {
+            $code .= 'if (' . $traitMetadata['registration'] . ' != SUCCESS) {' . PHP_EOL;
+            $code .= $this->getIndent() . 'return FAILURE;' . PHP_EOL;
+            $code .= '}' . PHP_EOL;
+        }
         $code .= 'if (typephp_install_reflection_attribute_handlers() != SUCCESS) {' . PHP_EOL;
+        if ($traitMetadata['registration'] !== '') {
+            $code .= $this->getIndent() . 'typephp_unregister_trait_metadata(module_number);' . PHP_EOL;
+        }
         $code .= $this->getIndent() . 'return FAILURE;' . PHP_EOL;
         $code .= '}' . PHP_EOL;
         if (!$this->isWasiTarget()) {
@@ -1168,6 +1230,9 @@ CODE;
         $code .= '}' . PHP_EOL;
         if (!$this->isWasiTarget()) {
             $code .= 'typephp_unregister_fiber_generator_class();' . PHP_EOL;
+        }
+        if ($traitMetadata['registration'] !== '') {
+            $code .= 'typephp_unregister_trait_metadata(module_number);' . PHP_EOL;
         }
         $code .= 'typephp_uninstall_reflection_attribute_handlers();' . PHP_EOL;
         $code .= 'return SUCCESS;' . PHP_EOL;
