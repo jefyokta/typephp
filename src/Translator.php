@@ -6652,6 +6652,7 @@ CODE;
     {
         $name = $methodStmt->name->toString();
         $this->assertNativeMagicMethodSupported($methodStmt, $name);
+        $this->assertEnumMayIncludeMethod($methodStmt, $name);
         if ($this->classDef->hasMethod($name) || $this->classDef->hasAbstractMethod($name)) {
             return;
         }

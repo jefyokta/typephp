@@ -46,7 +46,47 @@ use PhpParser\NodeVisitor\NameResolver;
 
 class Preprocessor extends CompilerBase
 {
+    /**
+     * Magic methods forbidden on PHP enums. Enum cases are runtime-managed
+     * singletons, so construction, cloning, destruction, serialization and
+     * magic property/string/debug handlers cannot be supplied by user code.
+     * __call, __callStatic and __invoke remain valid enum methods.
+     */
+    private const array ENUM_FORBIDDEN_MAGIC_METHODS = [
+        '__construct' => true,
+        '__destruct' => true,
+        '__clone' => true,
+        '__get' => true,
+        '__set' => true,
+        '__unset' => true,
+        '__isset' => true,
+        '__sleep' => true,
+        '__wakeup' => true,
+        '__set_state' => true,
+        '__serialize' => true,
+        '__unserialize' => true,
+        '__tostring' => true,
+        '__debuginfo' => true,
+    ];
+
     protected string $targetName = 'app';
+
+    /**
+     * Validate every method that will become part of an enum. This is shared
+     * with the Trait-composition phase so a Trait method or alias cannot defer
+     * the error to Zend class registration at runtime.
+     */
+    protected function assertEnumMayIncludeMethod(Node $node, string $name): void
+    {
+        if (!$this->classDef->enum || !isset(self::ENUM_FORBIDDEN_MAGIC_METHODS[strtolower($name)])) {
+            return;
+        }
+
+        $this->fatalError(
+            $node,
+            "Enum `{$this->classDef->getNamespacedName(false)}` cannot include magic method `{$name}`",
+        );
+    }
 
     /**
      * Discover Native class names before parsing any signatures or fields.
@@ -2328,6 +2368,7 @@ class Preprocessor extends CompilerBase
         $this->method = $name;
         $this->assertKeywordMethodMayBeDeclared($v, $name, $this->classDef->nativeObject);
         $this->assertNativeMagicMethodSupported($v, $name);
+        $this->assertEnumMayIncludeMethod($v, $name);
         $flags = $this->parseModifiers($v->flags);
         $abstract = $flags & Modifiers::ABSTRACT;
         if ($this->classDef->nativeObject && ($flags & Modifiers::STATIC)) {
