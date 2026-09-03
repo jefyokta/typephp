@@ -3910,10 +3910,12 @@ class PropertyInfo extends VariableLike
 }
 
 class EnumCaseInfo {
+    private /* readonly */ string $enumClass;
     private /* readonly */ string $name;
     private /* readonly */ ?Expr $value;
 
-    public function __construct(string $name, ?Expr $value) {
+    public function __construct(string $enumClass, string $name, ?Expr $value) {
+        $this->enumClass = $enumClass;
         $this->name = $name;
         $this->value = $value;
     }
@@ -3924,7 +3926,18 @@ class EnumCaseInfo {
         if ($this->value === null) {
             $code = "\n\tzend_enum_add_case_cstr(class_entry, \"$escapedName\", NULL);\n";
         } else {
-            $value = EvaluatedValue::createFromExpression($this->value, null, null, $allConstInfos);
+            // TypePHP finalizes every backed case expression after declaration
+            // and Trait composition, before code generation. Consume that
+            // scalar result here; never re-evaluate the source AST or defer it
+            // to request runtime.
+            $backingValue = getTranslator()->getFinalizedEnumCaseBackingValue(
+                $this->enumClass,
+                $this->name,
+            );
+            $expression = is_int($backingValue)
+                ? new Node\Scalar\Int_($backingValue)
+                : new String_($backingValue);
+            $value = EvaluatedValue::createFromExpression($expression, null, null, $allConstInfos);
 
             $zvalName = "enum_case_{$escapedName}_value";
             $code = "\n" . $value->initializeZval($zvalName);
@@ -5141,7 +5154,7 @@ class FileInfo {
                         );
                     } else if ($classStmt instanceof Stmt\EnumCase) {
                         $enumCaseInfos[] = new EnumCaseInfo(
-                            $classStmt->name->toString(), $classStmt->expr);
+                            $className->toString(), $classStmt->name->toString(), $classStmt->expr);
                     } else if ($classStmt instanceof Stmt\TraitUse) {
                         continue;
                     } else {

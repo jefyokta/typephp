@@ -604,6 +604,10 @@ class Preprocessor extends CompilerBase
                 }
                 continue;
             }
+            if ($statement instanceof Node\Stmt\EnumCase) {
+                $this->finalizePreparedEnumCase($statement);
+                continue;
+            }
             if (!$statement instanceof Node\Stmt\ClassMethod) {
                 continue;
             }
@@ -619,6 +623,62 @@ class Preprocessor extends CompilerBase
                 $this->finalizePreparedFunctionDefaults($statement, $this->methodDef->functionDef);
             }
         }
+    }
+
+    /**
+     * Resolve a backed enum case to its final scalar after every declaration
+     * and composed Trait member is known. The source expression is retained
+     * only until this point; no unresolved expression may reach codegen.
+     */
+    private function finalizePreparedEnumCase(Node\Stmt\EnumCase $case): void
+    {
+        $name = $this->parseIdentifier($case->name);
+        $enumName = $this->classDef->getNamespacedName(false);
+        $backingType = $this->classDef->enumBackingType;
+
+        if ($backingType === null) {
+            if ($case->expr !== null) {
+                $this->fatalError(
+                    $case,
+                    "Case `{$name}` of non-backed enum `{$enumName}` must not have a value",
+                );
+            }
+            $this->classDef->enumCases[$name] = null;
+            unset($this->classDef->enumCaseExpressions[$name]);
+            return;
+        }
+
+        if ($case->expr === null) {
+            $this->fatalError(
+                $case,
+                "Case `{$name}` of backed enum `{$enumName}` must have a value",
+            );
+        }
+
+        // A recursive dependency may already have finalized this case while
+        // another case expression was being evaluated.
+        if (!isset($this->classDef->enumCaseExpressions[$name])) {
+            return;
+        }
+
+        $this->classDef->enumCases[$name] = $this->evaluatePreparedEnumCaseBackingValue(
+            $case,
+            $this->classDef,
+            $name,
+        );
+        unset($this->classDef->enumCaseExpressions[$name]);
+    }
+
+    /**
+     * Translator supplies the constant-expression evaluator. Keeping the hook
+     * here makes the prepare/compose/finalize phase boundary explicit.
+     */
+    protected function evaluatePreparedEnumCaseBackingValue(
+        Node\Stmt\EnumCase $case,
+        ClassDef $classDef,
+        string $caseName,
+    ): int|string {
+        throw new \LogicException('Enum case constant-expression evaluator is not available');
     }
 
     private function finalizeInterfaceDeclarationExpressions(Node\Stmt\Interface_ $interface): void
@@ -1355,6 +1415,7 @@ class Preprocessor extends CompilerBase
         }
 
         $this->classDef = new ClassDef($this->class, $flags, $this->namespace);
+        $this->classDef->sourceFile = $this->file;
         $this->classDef->nativeObject = NativeClassAttributeLowering::isNative($class);
         $this->classDef->exported = !$this->hasNoExportAttribute($class);
         if ($this->classDef->nativeObject && $this->stubFile) {
@@ -1485,6 +1546,9 @@ class Preprocessor extends CompilerBase
                         $v->expr instanceof Node\Scalar\Int_ || $v->expr instanceof Node\Scalar\String_
                             ? $v->expr->value
                             : null;
+                    if ($v->expr !== null) {
+                        $this->classDef->enumCaseExpressions[$caseName] = $v->expr;
+                    }
                     break;
                 case 'Stmt_ClassMethod':
                     $this->prepareClassMethod($v, $class);
@@ -2638,6 +2702,7 @@ class Preprocessor extends CompilerBase
         $name = $this->parseIdentifier($v->name);
         $this->interface = $name;
         $this->interfaceDef = new InterfaceDef($name, $this->namespace);
+        $this->interfaceDef->sourceFile = $this->file;
         $interfaceName = $this->interfaceDef->getNamespacedName(false);
         $interfaceNameLower = strtolower($interfaceName);
 

@@ -56,6 +56,13 @@ class ClassDef extends ClassLikeDef
      * @var array<string, int|string|null>
      */
     public array $enumCases = [];
+
+    /**
+     * Backing-value ASTs waiting for declaration-expression finalization.
+     * These expressions are never emitted as runtime calculations.
+     * @var array<string, \PhpParser\Node\Expr>
+     */
+    public array $enumCaseExpressions = [];
     /**
      * Abstract method name (lowercase) => flags
      * @var array<string, int>
