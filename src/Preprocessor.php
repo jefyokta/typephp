@@ -1392,6 +1392,11 @@ class Preprocessor extends CompilerBase
 
         if ($class instanceof Node\Stmt\Class_) {
             $flags = $class->flags;
+        } elseif ($class instanceof Node\Stmt\Enum_) {
+            // PHP lowers every enum declaration as ZEND_ACC_ENUM | ZEND_ACC_FINAL.
+            // Keep the compiler model equally final for inheritance checks and
+            // only-safe-when-final static dispatch decisions.
+            $flags = Modifiers::PUBLIC | Modifiers::FINAL;
         } else {
             $flags = Modifiers::PUBLIC;
         }
@@ -1536,12 +1541,16 @@ class Preprocessor extends CompilerBase
                     break;
                 case 'Stmt_EnumCase':
                     $caseName = $this->parseIdentifier($v->name);
-                    // Only literal backing values are recorded here; an
-                    // expression-valued case (`case A = 1 + 1;`) cannot be
-                    // evaluated while declarations are still being collected,
-                    // and no compile-time consumer needs the scalar: case
-                    // identity flows as EnumCaseRef and gen_stub evaluates
-                    // the registration value from the AST itself.
+                    if (array_key_exists($caseName, $this->classDef->enumCases)
+                        || $this->classDef->hasConstant($caseName)
+                    ) {
+                        $enumName = $this->classDef->getNamespacedName(false);
+                        $this->fatalError($v, "Cannot redefine class constant {$enumName}::{$caseName}");
+                    }
+                    // Keep every backing expression until declaration
+                    // finalization. Literal values also seed enumCases for
+                    // declaration consumers, but code generation only accepts
+                    // values finalized after the complete symbol graph exists.
                     $this->classDef->enumCases[$caseName] =
                         $v->expr instanceof Node\Scalar\Int_ || $v->expr instanceof Node\Scalar\String_
                             ? $v->expr->value

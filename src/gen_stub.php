@@ -4214,7 +4214,10 @@ class ClassInfo {
                 ? $this->enumBackingType->toTypeCode() : "IS_UNDEF";
             $code .= "\tzend_class_entry *class_entry = zend_register_internal_enum(\"$name\", $backingType, $classMethods);\n";
             if (!$flags->isEmpty()) {
-                $code .= $this->getFlagsByPhpVersion()->generateVersionDependentFlagCode("\tclass_entry->ce_flags = %s;\n", $this->phpVersionIdMinimumCompatibility);
+                // zend_register_internal_enum() has already installed
+                // ZEND_ACC_ENUM. Add TypePHP's implicit FINAL flag without
+                // replacing the enum bit or future flags owned by Zend.
+                $code .= $this->getFlagsByPhpVersion()->generateVersionDependentFlagCode("\tclass_entry->ce_flags |= %s;\n", $this->phpVersionIdMinimumCompatibility);
             }
         } else {
             $code .= "\tzend_class_entry ce, *class_entry;\n\n";
@@ -5885,7 +5888,9 @@ function parseClass(
 
     return new ClassInfo(
         $name,
-        $class instanceof Class_ ? $class->flags : 0,
+        $class instanceof Class_
+            ? $class->flags
+            : ($class instanceof Enum_ ? Modifiers::FINAL : 0),
         $classKind,
         $alias,
         $class instanceof Enum_ && $class->scalarType !== null

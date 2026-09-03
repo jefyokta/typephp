@@ -66,6 +66,7 @@ final class EnumCaseConstantExpressionTest extends PHPUnit\Framework\TestCase
         string $expression,
         string $expected,
         string $declarations = '',
+        string $additionalCases = '',
     ): void {
         $root = sys_get_temp_dir() . '/typephp-enum-expression-' . bin2hex(random_bytes(8));
         mkdir($root, 0777, true);
@@ -76,6 +77,7 @@ final class EnumCaseConstantExpressionTest extends PHPUnit\Framework\TestCase
 enum InvalidEnum: int
 {
     case A = {$expression};
+    {$additionalCases}
 }
 
 function main(): void {}
@@ -127,6 +129,20 @@ PHP);
             'FIRST',
             'Cannot declare self-referencing constant `FIRST`',
             'const FIRST = SECOND; const SECOND = FIRST;',
+        ];
+        yield 'mutually recursive enum cases' => [
+            'self::B->value + 1',
+            'Cannot declare self-referencing constant `InvalidEnum::A`',
+            '',
+            'case B = self::A->value + 1;',
+        ];
+        yield 'unknown enum case' => [
+            'self::Missing->value',
+            'Class constant `InvalidEnum::Missing` not found',
+        ];
+        yield 'evaluation error' => [
+            '1 / 0',
+            'backing value must be compile-time evaluable: Division by zero',
         ];
     }
 
