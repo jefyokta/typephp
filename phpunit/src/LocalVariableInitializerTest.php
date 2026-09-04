@@ -106,12 +106,12 @@ final class LocalVariableInitializerTest extends \BaseTest
         self::assertStringContainsString('php::Var selfValue = get_str(', $code);
         self::assertStringContainsString('php::Var parentValue = 128L;', $code);
         self::assertStringContainsString('php::Var concreteValue = get_str(', $code);
-        self::assertStringContainsString('php::Var selfClass = get_str(', $code);
-        self::assertStringContainsString('php::Var parentClass = get_str(', $code);
-        self::assertStringContainsString('php::Var unknownClass = get_str(', $code);
+        self::assertStringContainsString('php::Str selfClass = get_str(', $code);
+        self::assertStringContainsString('php::Str parentClass = get_str(', $code);
+        self::assertStringContainsString('php::Str unknownClass = get_str(', $code);
 
         self::assertStringContainsString('php::Var lateStatic;', $code);
-        self::assertStringContainsString('lateStatic = php::constant(php::getCalledCe(this_)', $code);
+        self::assertStringContainsString('lateStatic = php::constant(typephp_get_called_ce(this_)', $code);
         self::assertStringContainsString('php::Var external = "', $code);
         self::assertStringNotContainsString("php::Var external;\n", $code);
         self::assertStringContainsString('php::Var runtimeClassConstant;', $code);

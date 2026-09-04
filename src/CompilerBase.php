@@ -3260,6 +3260,13 @@ class CompilerBase implements PropertyAccessContext
                     }
                 }
                 break;
+            case 'Expr_ClassConstFetch':
+                if ($this->isIdExpr($expr->name)
+                    && strtolower($this->parseIdentifier($expr->name)) === 'class'
+                ) {
+                    return Type::STR;
+                }
+                break;
             case 'Expr_ArrayDimFetch':
                 if ($this->isStdArrayExpr($expr)) {
                     if (!$expr->hasAttribute('stdArrayDimFetch')) {
@@ -4378,6 +4385,25 @@ class CompilerBase implements PropertyAccessContext
             if ($nativePresence !== null) {
                 return $nativePresence;
             }
+        }
+        if ($op === self::OP_ISSET
+            && $node instanceof Expr\ArrayDimFetch
+            && $node->dim !== null
+            && $node->var instanceof Expr\StaticPropertyFetch
+            && $this->detectTypeOfExpr($node->var) === Type::ARRAY
+        ) {
+            // A single offset on a statically known array property needs no
+            // materialized operation chain. The TypePHP array helper reads the
+            // element directly and still applies isset's null semantics. Keep
+            // the general walker for deeper/dynamic chains.
+            $array = $this->parseStaticPropertyFetch($node->var);
+            $key = $this->parseIdentifier($node->dim);
+            if ($getValue) {
+                $result = $this->addTmpVar(Type::VAR);
+                $node->setAttribute('chainOpResult', $result);
+                return 'typephp_array_isset(' . $array . ', ' . $key . ', &' . $result . ')';
+            }
+            return 'typephp_array_isset(' . $array . ', ' . $key . ')';
         }
         // The TypePHP compiler disallows operating on undefined variables;
         // in PHP, isset($var) may be used with an undefined $var.

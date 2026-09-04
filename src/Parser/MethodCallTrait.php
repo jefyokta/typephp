@@ -954,6 +954,53 @@ trait MethodCallTrait
         return '(' . $classVar . '.isObject() ? php::fn::get_class(' . $classVar . ') : php::toString(' . $classVar . '))';
     }
 
+    /**
+     * Fast-path a zero-argument late-static call when the runtime called class
+     * is exactly the lexical TypePHP class.
+     *
+     * `static::method()` cannot normally be devirtualized because a subclass
+     * may override the method. The exact-class guard makes the direct branch
+     * provably safe, while inherited/subclass calls retain normal Zend
+     * dispatch. Calls with arguments and special return representations stay
+     * on the general path until they can share one materialized argument list.
+     */
+    private function parseExactLateStaticCall(
+        Expr\StaticCall $expr,
+        string $method,
+        string $methodPtr,
+    ): ?string {
+        if ($expr->args !== [] || !$this->classDef || !$this->methodDef) {
+            return null;
+        }
+
+        $class = $this->getFullClassName();
+        try {
+            $nativeFunc = $this->getNativeMethod($expr, $class, $method);
+        } catch (DynamicCall) {
+            return null;
+        }
+        if ($nativeFunc === false || !$this->hasFunction($nativeFunc)) {
+            return null;
+        }
+
+        $function = $this->getFunction($nativeFunc);
+        if ($function->returnsByRef
+            || $function->generator
+            || $function->hasMultiReturn()
+            || $function->returnType === Type::VOID
+            || $this->isStdContainerType($function->returnType)
+            || ($function->returnClass !== '' && $this->isNativeObjectClass($function->returnClass))
+        ) {
+            return null;
+        }
+
+        $calledCe = Symbol::getCalledCe();
+        $direct = 'php::Var(' . self::PREFIX . $nativeFunc . '(this_))';
+        $fallback = 'php::call(' . $calledCe . ', php::getMethod(' . $calledCe . ', ' . $methodPtr . '))';
+        return '(EXPECTED(' . $calledCe . ' == ' . $this->getClassEntryPtr($class) . ')'
+            . ' ? ' . $direct . ' : ' . $fallback . ')';
+    }
+
     protected function parseStaticCall(Expr\StaticCall $expr): string
     {
         $this->validateImmutableCall($expr);
@@ -1026,6 +1073,10 @@ trait MethodCallTrait
             }
             $method = $this->parseIdentifier($expr->name);
             $methodPtr = $this->methodNameToStr($expr->name, literal: true);
+            $exactCall = $this->parseExactLateStaticCall($expr, $method, $methodPtr);
+            if ($exactCall !== null) {
+                return $exactCall;
+            }
             $fn = Symbol::getCalledCe() . ', php::getMethod(' . Symbol::getCalledCe() . ', ' . $methodPtr . ')';
             if ($this->debug) {
                 $this->context->beforeStmtLines[] = $this->formatCppLineComment(

@@ -54,8 +54,8 @@ class LoopControlTest extends \BaseTest
         $this->assertMatchesRegularExpression('/\.attr\([^)]+\)[^;]*--/', $cpp);
 
         // static-property postfix must NOT be rewritten
-        $this->assertMatchesRegularExpression('/getStaticProperty\([^)]+\)[^;]*\+\+/', $cpp);
-        $this->assertMatchesRegularExpression('/getStaticProperty\([^)]+\)[^;]*--/', $cpp);
+        $this->assertMatchesRegularExpression('/typephp_get_static_property\([^)]+\)[^;]*\+\+/', $cpp);
+        $this->assertMatchesRegularExpression('/typephp_get_static_property\([^)]+\)[^;]*--/', $cpp);
 
         // array-element postfix must NOT be rewritten
         $this->assertMatchesRegularExpression('/\.item\([^)]+\)[^;]*\+\+/', $cpp);

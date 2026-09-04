@@ -12,6 +12,11 @@ class SymbolTest extends TestCase
         $this->assertEquals('php::getStaticProperty', Symbol::getStaticProperty());
     }
 
+    public function testGetResolvedStaticProperty(): void
+    {
+        $this->assertEquals('typephp_get_static_property', Symbol::getResolvedStaticProperty());
+    }
+
     public function testSetStaticProperty(): void
     {
         $this->assertEquals('php::setStaticProperty', Symbol::setStaticProperty());
@@ -44,12 +49,12 @@ class SymbolTest extends TestCase
 
     public function testGetCalledCe(): void
     {
-        $this->assertSame('php::getCalledCe(this_)', Symbol::getCalledCe());
+        $this->assertSame('typephp_get_called_ce(this_)', Symbol::getCalledCe());
     }
 
     public function testGetCalledClass(): void
     {
-        $this->assertSame('php::getCalledClass(this_)', Symbol::getCalledClass());
+        $this->assertSame('typephp_get_called_class(this_)', Symbol::getCalledClass());
     }
 
     public function testSafeIndex(): void

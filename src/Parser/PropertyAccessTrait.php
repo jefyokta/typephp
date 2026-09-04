@@ -493,7 +493,7 @@ trait PropertyAccessTrait
             if ($resolution->nativeProperty && $class !== null) {
                 $classPtr = $this->getClassEntryPtr($class);
                 $this->setNativePropertyValueSource($expr, self::NATIVE_PROPERTY_VALUE_DYNAMIC);
-                return Symbol::getStaticProperty() . '(' . $classPtr . ', ' . $nativeProp . ')';
+                return Symbol::getResolvedStaticProperty() . '(' . $classPtr . ', ' . $nativeProp . ')';
             } else {
                 $this->setNativePropertyValueSource($expr, self::NATIVE_PROPERTY_VALUE_DYNAMIC);
                 return $nativeProp;
