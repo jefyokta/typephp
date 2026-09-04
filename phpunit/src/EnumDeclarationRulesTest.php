@@ -68,6 +68,89 @@ PHP);
         yield 'constant then case' => ['public const Hearts = 1; case Hearts;'];
     }
 
+    /** @dataProvider duplicateBackingValueProvider */
+    public function testDuplicateBackingValueIsRejectedAfterConstantEvaluation(
+        string $declarations,
+        string $enum,
+        string $expectedCases,
+    ): void {
+        $compiler = $this->compilerFor(<<<PHP
+<?php
+{$declarations}
+{$enum}
+function main(): void {}
+PHP);
+        $file = $this->testRoot . '/program.php';
+        $compiler->prepareFile($file);
+
+        try {
+            $compiler->convertFile($file);
+            self::fail('Compilation unexpectedly succeeded');
+        } catch (TestError $error) {
+            self::assertStringContainsString(
+                "Duplicate value in enum Code for cases {$expectedCases}",
+                $error->getMessage(),
+            );
+        }
+        self::assertFileDoesNotExist($compiler->getCppFile($file));
+    }
+
+    public static function duplicateBackingValueProvider(): iterable
+    {
+        yield 'integer literals' => [
+            '',
+            'enum Code: int { case First = 1; case Second = 1; }',
+            'First and Second',
+        ];
+        yield 'integer constant expression' => [
+            '',
+            'enum Code: int { case First = 1 + 1; case Second = 2; }',
+            'First and Second',
+        ];
+        yield 'negative zero folds to zero' => [
+            '',
+            'enum Code: int { case First = -0; case Second = 0; }',
+            'First and Second',
+        ];
+        yield 'string constant expression' => [
+            '',
+            "enum Code: string { case First = 'type' . 'php'; case Second = 'typephp'; }",
+            'First and Second',
+        ];
+        yield 'global and class constants' => [
+            'const VALUE = 4; class Provider { public const VALUE = VALUE; }',
+            'enum Code: int { case First = VALUE; case Second = Provider::VALUE; }',
+            'First and Second',
+        ];
+        yield 'enum case value reference' => [
+            '',
+            'enum Code: int { case First = 5; case Second = self::First->value; }',
+            'First and Second',
+        ];
+        yield 'forward reference retains source order' => [
+            '',
+            'enum Code: int { case First = self::Third->value + 1; case Second = 7; case Third = 6; }',
+            'First and Second',
+        ];
+    }
+
+    public function testDistinctNumericStringsRemainDistinct(): void
+    {
+        $compiler = $this->compilerFor(<<<'PHP'
+<?php
+enum Code: string { case One = '1'; case ZeroOne = '01'; }
+function main(): void {}
+PHP);
+        $file = $this->testRoot . '/program.php';
+        $compiler->prepareFile($file);
+        $compiler->convertFile($file);
+
+        self::assertSame(
+            ['One' => '1', 'ZeroOne' => '01'],
+            $compiler->getClassDef('Code')?->enumCases,
+        );
+    }
+
     public function testCaseNamesRemainCaseSensitive(): void
     {
         $compiler = $this->compilerFor(<<<'PHP'

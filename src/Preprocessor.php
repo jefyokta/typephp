@@ -623,6 +623,49 @@ class Preprocessor extends CompilerBase
                 $this->finalizePreparedFunctionDefaults($statement, $this->methodDef->functionDef);
             }
         }
+        if ($class instanceof Node\Stmt\Enum_) {
+            $this->assertUniqueEnumBackingValues($class);
+        }
+    }
+
+    /**
+     * Reject duplicate backed values once every case expression has been
+     * folded. Scanning the declaration AST preserves source order even when a
+     * forward reference caused a later case to be evaluated recursively.
+     */
+    private function assertUniqueEnumBackingValues(Node\Stmt\Enum_ $enum): void
+    {
+        if ($this->classDef->enumBackingType === null) {
+            return;
+        }
+
+        /** @var array<string, string> $firstCaseByValue */
+        $firstCaseByValue = [];
+        foreach ($enum->stmts as $statement) {
+            if (!$statement instanceof Node\Stmt\EnumCase) {
+                continue;
+            }
+            $caseName = $this->parseIdentifier($statement->name);
+            $value = $this->classDef->enumCases[$caseName] ?? null;
+            if (!is_int($value) && !is_string($value)) {
+                throw new \LogicException(
+                    "Enum case `{$this->classDef->getNamespacedName(false)}::{$caseName}` was not finalized",
+                );
+            }
+
+            // Prefix the scalar type so numeric strings can never become
+            // integer array keys or collide with integer backing values.
+            $key = is_int($value) ? 'i:' . $value : 's:' . $value;
+            if (array_key_exists($key, $firstCaseByValue)) {
+                $enumName = $this->classDef->getNamespacedName(false);
+                $firstCase = $firstCaseByValue[$key];
+                $this->fatalError(
+                    $statement,
+                    "Duplicate value in enum {$enumName} for cases {$firstCase} and {$caseName}",
+                );
+            }
+            $firstCaseByValue[$key] = $caseName;
+        }
     }
 
     /**
