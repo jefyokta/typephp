@@ -32,6 +32,68 @@ trait NativeBuildConfigurationTrait
         return $sdkDir;
     }
 
+    /**
+     * The target triple used for fully-static links.
+     *
+     * libphp.a embeds musl libc, so the executable must be linked as a musl
+     * target; the triple also drives the linker's search for musl startup files.
+     */
+    protected function getFullStaticTargetTriple(): string
+    {
+        $arch = match (php_uname('m')) {
+            'aarch64', 'arm64' => 'aarch64',
+            'riscv64' => 'riscv64',
+            default => 'x86_64',
+        };
+        return $arch . '-unknown-linux-musl';
+    }
+
+    /**
+     * Resolve the directory holding the musl startup files (crt1.o/crti.o/crtn.o).
+     *
+     * A fully-static link must not pull crt1.o from glibc: glibc's _start lets
+     * musl's __libc_start_main (bundled in libphp.a) install a thread pointer
+     * whose layout does not match the TLS offsets the linker computed, so every
+     * thread-local read (ZTS globals, and PHP's ZEND_TLS data) lands on the
+     * wrong address and the process crashes during php_module_startup.
+     *
+     * Resolution order: PHPX_MUSL_LIB_DIR, the bundled SDK, then the usual
+     * system locations.
+     */
+    protected function getFullStaticMuslDir(): string
+    {
+        $sdkDir = $this->getFullStaticSdkDir();
+        $arch = explode('-', $this->getFullStaticTargetTriple())[0];
+
+        $candidates = [];
+        $env = getenv('PHPX_MUSL_LIB_DIR');
+        if (is_string($env) && $env !== '') {
+            $candidates[] = $env;
+        }
+        if ($sdkDir !== null) {
+            $candidates[] = $sdkDir . '/lib/musl';
+        }
+        // Alpine and other musl-native systems keep the startup files in /usr/lib
+        $candidates[] = '/usr/lib/' . $arch . '-linux-musl';
+        $candidates[] = '/usr/lib/' . $arch . '-alpine-linux-musl';
+        $candidates[] = '/usr/lib/musl';
+        $candidates[] = '/usr/local/musl/lib';
+        $candidates[] = '/usr/lib';
+
+        foreach ($candidates as $dir) {
+            if (is_file($dir . '/crt1.o')) {
+                return $dir;
+            }
+        }
+
+        $this->error(
+            "--full-static requires musl startup files (crt1.o).\n"
+            . "  Looked in: " . implode(', ', $candidates) . "\n"
+            . "  Install musl (e.g. 'apt install musl-dev'), or copy crt1.o/crti.o/crtn.o from the\n"
+            . '  swoole-cli build container into ' . ($sdkDir ?? '<sdk>') . "/lib/musl, or set PHPX_MUSL_LIB_DIR."
+        );
+    }
+
     protected function getIncludePaths(): array
     {
         $sdkDir = $this->getFullStaticSdkDir();

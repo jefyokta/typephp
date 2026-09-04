@@ -218,11 +218,13 @@ class Translator extends Preprocessor
                 ? $this->platform->getDefaultCompiler()
                 : CompilerFactory::detectCompilerName($this->platform);
 
-            // --full-static: the bundled libphp.a/libphpx.a are built by clang.
-            // gcc and clang compute TLS offsets differently (gcc's layout differs
-            // by 64 bytes here), which corrupts thread-local variables at runtime,
-            // so fully-static builds must use a real Linux clang (PHPX_CC/CXX take
-            // precedence; otherwise fall back to clang) to keep the toolchain consistent.
+            // --full-static: libphp.a embeds musl libc, so the link must produce a
+            // musl binary. That is driven by clang's --target=<arch>-unknown-linux-musl
+            // plus -static -B <musl dir>, which gcc does not accept; a glibc link
+            // would let musl's __libc_start_main install a thread pointer whose
+            // layout does not match the linker's TLS offsets, corrupting every
+            // thread-local read in PHP's ZTS globals. PHPX_CC/CXX take precedence,
+            // otherwise fall back to clang.
             if ($this->climate->arguments->defined('full-static')) {
                 $this->fullStatic = true;
                 $this->cppCompiler = getenv('PHPX_CC') ?: (getenv('CXX') ?: 'clang');
