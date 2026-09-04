@@ -471,7 +471,9 @@ trait CallArgumentGenerator
                     $this->context->beforeStmtLines[] = $namedArgsArray . '.set(' . $this->getLiteralString($arg->name->name) . ', ' . $value . ');';
                 } else {
                     $arrayArgs = $this->ensureCallArrayArgs($arrayArgsVar, $list_args);
-                    $this->context->beforeStmtLines[] = $arrayArgs . '.set(' . $this->getLiteralString($arg->name->name) . ', ' . $value . ');';
+                    $method = $forceArrayArgs ? 'setValue' : 'set';
+                    $this->context->beforeStmtLines[] = $arrayArgs . '.' . $method . '('
+                        . $this->getLiteralString($arg->name->name) . ', ' . $value . ');';
                 }
                 continue;
             }
@@ -495,13 +497,13 @@ trait CallArgumentGenerator
                     }
                 }
                 $value = $this->wrapScopedCallbackArg($arg, $this->parseCallArgValue($arg));
-                $this->addPositionalCallArg($value, $arrayArgsVar, $list_args);
+                $this->addPositionalCallArg($value, $arrayArgsVar, $list_args, $forceArrayArgs);
                 continue;
             }
             if ($this->isVarExpr($arg->value)) {
                 $name = $this->parseIdentifier($arg->value);
                 if ($byRef) {
-                    $this->addPositionalCallArg($this->parseArgRefVar($arg, $name), $arrayArgsVar, $list_args);
+                    $this->addPositionalCallArg($this->parseArgRefVar($arg, $name), $arrayArgsVar, $list_args, $forceArrayArgs);
                     continue;
                 }
                 if (!$this->hasVar($name)) {
@@ -509,7 +511,7 @@ trait CallArgumentGenerator
                 }
             } elseif ($this->isPropertyFetch($arg->value)) {
                 if ($byRef) {
-                    $this->addPositionalCallArg($this->emitDynamicPropertyFetchRef($arg->value, $arg), $arrayArgsVar, $list_args);
+                    $this->addPositionalCallArg($this->emitDynamicPropertyFetchRef($arg->value, $arg), $arrayArgsVar, $list_args, $forceArrayArgs);
                     continue;
                 }
                 if ($this->isVarExpr($arg->value->var)) {
@@ -526,9 +528,9 @@ trait CallArgumentGenerator
                     if ($byRef) {
                         $ref = $this->addTmpVar(Type::REF);
                         $this->context->beforeStmtLines[] = $ref . ' = ' . $globalVar . '.toReference();';
-                        $this->addPositionalCallArg('&' . $ref, $arrayArgsVar, $list_args);
+                        $this->addPositionalCallArg('&' . $ref, $arrayArgsVar, $list_args, $forceArrayArgs);
                     } else {
-                        $this->addPositionalCallArg($globalVar, $arrayArgsVar, $list_args);
+                        $this->addPositionalCallArg($globalVar, $arrayArgsVar, $list_args, $forceArrayArgs);
                     }
                     continue;
                 }
@@ -539,7 +541,7 @@ trait CallArgumentGenerator
                     if ($arg->value->dim === null) {
                         $this->fatalError($arg, 'Array dimension must be a constant expression');
                     }
-                    $this->addPositionalCallArg($array . '.itemRef(' . $this->identifierToStr($arg->value->dim) . ')', $arrayArgsVar, $list_args);
+                    $this->addPositionalCallArg($array . '.itemRef(' . $this->identifierToStr($arg->value->dim) . ')', $arrayArgsVar, $list_args, $forceArrayArgs);
                     continue;
                 }
             } elseif ($this->isReferenceWrapperCall($arg->value)) {
@@ -547,12 +549,12 @@ trait CallArgumentGenerator
                 if ($this->isVarExpr($inner)) {
                     $name = $this->parseVariable($inner);
                     $arg->value = $inner;
-                    $this->addPositionalCallArg($this->parseArgRefVar($arg, $name), $arrayArgsVar, $list_args);
+                    $this->addPositionalCallArg($this->parseArgRefVar($arg, $name), $arrayArgsVar, $list_args, $forceArrayArgs);
                     continue;
                 }
                 $expr = $this->expandRefvalExpr($inner, $arg);
                 if ($expr !== null) {
-                    $this->addPositionalCallArg($expr, $arrayArgsVar, $list_args);
+                    $this->addPositionalCallArg($expr, $arrayArgsVar, $list_args, $forceArrayArgs);
                     continue;
                 }
                 $this->fatalError($arg, 'The refval function only accepts a variable, array element, or object property');
@@ -564,12 +566,12 @@ trait CallArgumentGenerator
                     $tmpRef = $this->genTmpVarName();
                     $this->addLocalVar($tmpRef, Type::REF);
                     $this->context->beforeStmtLines[] = $tmpRef . ' = ' . $this->parseChainedExpr($arg->value, self::OP_REFVAL) . ';';
-                    $this->addPositionalCallArg('&' . $tmpRef, $arrayArgsVar, $list_args);
+                    $this->addPositionalCallArg('&' . $tmpRef, $arrayArgsVar, $list_args, $forceArrayArgs);
                     continue;
                 }
             }
             $value = $this->parseCallArgValue($arg);
-            $this->addPositionalCallArg($value, $arrayArgsVar, $list_args);
+            $this->addPositionalCallArg($value, $arrayArgsVar, $list_args, $forceArrayArgs);
         }
 
         if ($argsVar !== null) {
@@ -635,10 +637,15 @@ trait CallArgumentGenerator
         return $namedArgsVar;
     }
 
-    protected function addPositionalCallArg(string $value, ?string $arrayArgsVar, array &$listArgs): void
-    {
+    protected function addPositionalCallArg(
+        string $value,
+        ?string $arrayArgsVar,
+        array &$listArgs,
+        bool $appendByValue = false,
+    ): void {
         if ($arrayArgsVar !== null) {
-            $this->context->beforeStmtLines[] = $arrayArgsVar . '.append(' . $value . ');';
+            $method = $appendByValue ? 'appendValue' : 'append';
+            $this->context->beforeStmtLines[] = $arrayArgsVar . '.' . $method . '(' . $value . ');';
         } else {
             $listArgs[] = $value;
         }

@@ -358,7 +358,11 @@ trait MethodCallTrait
             forceArrayArgs: true,
         );
 
-        return self::PREFIX . $nativeFunc . '(' . $object . ', ' . $method . ', ' . $arguments . ')';
+        // The argument array is a compiler-owned temporary used only by this
+        // direct call. Transfer its zval instead of incrementing/decrementing
+        // the array refcount at the generated __call() boundary.
+        return self::PREFIX . $nativeFunc . '('
+            . $object . ', ' . $method . ', std::move(' . $arguments . '))';
     }
 
     protected function parseNativeMethodCall(string $object, string $nativeFunc, array $args): string

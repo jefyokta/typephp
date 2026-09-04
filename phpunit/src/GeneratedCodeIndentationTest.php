@@ -18,7 +18,7 @@ class GeneratedCodeIndentationTest extends \PHPUnit\Framework\TestCase
         $code = file_get_contents($cppFile);
         $this->assertIsString($code);
         $this->assertStringContainsString(
-            "\t\twhile (tmp_var_0.next()) {\n\t\t\titem = tmp_var_0.value();",
+            "\t\twhile (tmp_var_0.nextValue(item)) {",
             $code,
         );
         $this->assertStringContainsString(

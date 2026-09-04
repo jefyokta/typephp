@@ -126,7 +126,10 @@ $typephp = parseDynamicCallResults(runDynamicCallCommand([$binary], $root, true,
 
 $cases = [
     'direct',
+    'string_monomorphic_zero',
     'string_monomorphic',
+    'string_monomorphic_two',
+    'string_monomorphic_four',
     'string_alternating',
     'string_megamorphic',
     'closure_monomorphic',

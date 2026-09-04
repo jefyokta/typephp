@@ -5,9 +5,24 @@ declare(strict_types=1);
 const DYNAMIC_CALL_ITERATIONS = 1_000_000;
 const DYNAMIC_CALL_ROUNDS = 5;
 
+function dynamicCallNoArgs(): int
+{
+    return 1;
+}
+
 function dynamicCallAddOne(int $value): int
 {
     return $value + 1;
+}
+
+function dynamicCallAddTwoArgs(int $left, int $right): int
+{
+    return $left + $right;
+}
+
+function dynamicCallAddFourArgs(int $a, int $b, int $c, int $d): int
+{
+    return $a + $b + $c + $d;
 }
 
 function dynamicCallAddTwo(int $value): int
@@ -96,6 +111,36 @@ function runMonomorphicStringCall(int $iterations): int
     $sum = 0;
     for ($i = 0; $i < $iterations; $i++) {
         $sum += $callback($i);
+    }
+    return $sum;
+}
+
+function runMonomorphicStringCallZeroArgs(int $iterations): int
+{
+    $callback = 'dynamicCallNoArgs';
+    $sum = 0;
+    for ($i = 0; $i < $iterations; $i++) {
+        $sum += $callback();
+    }
+    return $sum;
+}
+
+function runMonomorphicStringCallTwoArgs(int $iterations): int
+{
+    $callback = 'dynamicCallAddTwoArgs';
+    $sum = 0;
+    for ($i = 0; $i < $iterations; $i++) {
+        $sum += $callback($i, 1);
+    }
+    return $sum;
+}
+
+function runMonomorphicStringCallFourArgs(int $iterations): int
+{
+    $callback = 'dynamicCallAddFourArgs';
+    $sum = 0;
+    for ($i = 0; $i < $iterations; $i++) {
+        $sum += $callback($i, 1, 2, 3);
     }
     return $sum;
 }
@@ -221,7 +266,10 @@ function runDynamicCallCase(string $case, int $iterations): int
 {
     return match ($case) {
         'direct' => runDirectCall($iterations),
+        'string_monomorphic_zero' => runMonomorphicStringCallZeroArgs($iterations),
         'string_monomorphic' => runMonomorphicStringCall($iterations),
+        'string_monomorphic_two' => runMonomorphicStringCallTwoArgs($iterations),
+        'string_monomorphic_four' => runMonomorphicStringCallFourArgs($iterations),
         'string_alternating' => runAlternatingStringCall($iterations),
         'string_megamorphic' => runMegamorphicStringCall($iterations),
         'closure_monomorphic' => runMonomorphicClosureCall($iterations),
@@ -262,7 +310,10 @@ function main(): void
     $selectedCase = getenv('DYNAMIC_CALL_CASE');
     foreach ([
         'direct',
+        'string_monomorphic_zero',
         'string_monomorphic',
+        'string_monomorphic_two',
+        'string_monomorphic_four',
         'string_alternating',
         'string_megamorphic',
         'closure_monomorphic',

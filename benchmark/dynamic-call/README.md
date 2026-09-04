@@ -10,6 +10,10 @@ It also measures dynamic method names with a stable receiver, alternating
 method names, and a fixed method name on changing receiver classes. Those
 cases require a class-entry guard in addition to a callable-name guard.
 
+The monomorphic string-call cases cover zero, one, two, and four positional
+arguments. This separates callable-cache lookup cost from argument
+materialization cost and protects the small stack-argument fast path.
+
 Run it from the repository root against a release PHP/PHPX build:
 
 ```bash

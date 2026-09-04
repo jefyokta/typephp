@@ -120,23 +120,69 @@ trait ForeachTrait
         return $this->getIndent() . $valueVar . ' = ' . $valueExpr . ';' . PHP_EOL;
     }
 
-    protected function parseForeachIterable(Foreach_ $node, string $iterableVar): string
+    /**
+     * Return a foreach target that can be filled directly by ForeachIterator.
+     *
+     * The combined iterator API deliberately accepts only ordinary Variant
+     * variables. References, native scalar locals, properties, array offsets,
+     * and destructuring retain the general assignment path below.
+     */
+    protected function parseDirectForeachTarget(Foreach_ $node, Expr $target): ?string
+    {
+        if (!$this->isVarExpr($target)) {
+            return null;
+        }
+
+        $name = $this->parseIdentifier($target);
+        if ($this->hasVar($name) && $this->getVarType($name) !== Type::VAR) {
+            return null;
+        }
+        $this->checkVar($node, $name);
+        return $name;
+    }
+
+    protected function parseForeachIterable(
+        Foreach_ $node,
+        string $iterableVar,
+        bool $allowDirectArrayTargets = false,
+    ): string
     {
         $iterator = $this->genTmpVarName();
         $byRef = $node->byRef ? 'true' : 'false';
         $scope = $this->class ? $this->getLocalClassEntryPtr($this->getFullClassName()) : 'nullptr';
+        $directValue = null;
+        $directKey = null;
+        if ($allowDirectArrayTargets && !$node->byRef) {
+            $directValue = $this->parseDirectForeachTarget($node, $node->valueVar);
+            if ($directValue !== null && $node->keyVar !== null) {
+                $directKey = $this->parseDirectForeachTarget($node, $node->keyVar);
+                if ($directKey === null) {
+                    $directValue = null;
+                }
+            }
+        }
+
         $code = '{' . PHP_EOL;
         $this->indentLevel++;
         $code .= $this->getIndent() . "php::ForeachIterator $iterator{{$iterableVar}, $byRef, $scope};" . PHP_EOL;
-        $code .= $this->getIndent() . "while ($iterator.next()) {" . PHP_EOL;
+        if ($directValue !== null) {
+            $next = $directKey === null
+                ? "$iterator.nextValue($directValue)"
+                : "$iterator.nextKeyValue($directKey, $directValue)";
+        } else {
+            $next = "$iterator.next()";
+        }
+        $code .= $this->getIndent() . "while ($next) {" . PHP_EOL;
         $this->indentLevel++;
 
-        $code .= $this->parseForeachKeyAssignment($node, $iterator . '.key()');
-        $code .= $this->parseForeachValueAssignment(
-            $node,
-            $iterator . '.value()',
-            $iterator . '.assignValueRef',
-        );
+        if ($directValue === null) {
+            $code .= $this->parseForeachKeyAssignment($node, $iterator . '.key()');
+            $code .= $this->parseForeachValueAssignment(
+                $node,
+                $iterator . '.value()',
+                $iterator . '.assignValueRef',
+            );
+        }
 
         $body = $this->parseForeachBody($node);
         $this->indentLevel--;
@@ -203,7 +249,7 @@ trait ForeachTrait
                     || $type === Type::OBJECT
                     || ($node->byRef && ($type === Type::VAR || $type === Type::REF))
                 ) {
-                    return $this->parseForeachIterable($node, $name);
+                    return $this->parseForeachIterable($node, $name, $type === Type::ARRAY);
                 } elseif ($this->isStdContainerType($type)) {
                     return $this->parseForeachStdContainer($node);
                 }
