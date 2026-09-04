@@ -3350,8 +3350,11 @@ class CompilerBase implements PropertyAccessContext
         if ($type === Type::BIGINT || $type === Type::DECIMAL || $type === Type::BIGFLOAT) {
             $this->fatalError($expr, 'Cannot use ++ on ' . $type . '. Use += 1 instead (Big* types are immutable).');
         }
-        $result = '++' . $this->parseWritableIdentifier($expr->var);
-        return $result;
+        $var = $this->parseWritableIdentifier($expr->var);
+        if ($this->isVarExpr($expr->var) && !$this->hasVar($var)) {
+            $this->errorUndefinedVariable($expr->var);
+        }
+        return '++' . $var;
     }
 
     /**
@@ -3789,8 +3792,11 @@ class CompilerBase implements PropertyAccessContext
         if ($type === Type::BIGINT || $type === Type::DECIMAL || $type === Type::BIGFLOAT) {
             $this->fatalError($expr, 'Cannot use -- on ' . $type . '. Use -= 1 instead (Big* types are immutable).');
         }
-        $result = '--' . $this->parseWritableIdentifier($expr->var);
-        return $result;
+        $var = $this->parseWritableIdentifier($expr->var);
+        if ($this->isVarExpr($expr->var) && !$this->hasVar($var)) {
+            $this->errorUndefinedVariable($expr->var);
+        }
+        return '--' . $var;
     }
 
     protected function parsePrint(Expr\Print_ $expr): string

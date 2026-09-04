@@ -61,4 +61,20 @@ class LoopControlTest extends \BaseTest
         $this->assertMatchesRegularExpression('/\.item\([^)]+\)[^;]*\+\+/', $cpp);
         $this->assertMatchesRegularExpression('/\.item\([^)]+\)[^;]*--/', $cpp);
     }
+
+    public function testForLoopUndefinedPostIncrementKeepsCompilerDiagnostic(): void
+    {
+        $this->exec(
+            'The variable `$i` is undefined',
+            'loop/for-loop-undefined-post-inc.php',
+        );
+    }
+
+    public function testForLoopUndefinedPostDecrementKeepsCompilerDiagnostic(): void
+    {
+        $this->exec(
+            'The variable `$i` is undefined',
+            'loop/for-loop-undefined-post-dec.php',
+        );
+    }
 }

@@ -58,40 +58,34 @@ class StaticCounter {
 
 function test_property_post_inc_not_rewritten(): void {
     $obj = new Counter();
-    for ($i = 0; $i < 10; $i++) {
-        $obj->value++;
+    for ($i = 0; $i < 10; $i++, $obj->value++) {
     }
 }
 
 function test_property_post_dec_not_rewritten(): void {
     $obj = new Counter();
-    for ($i = 0; $i < 10; $i++) {
-        $obj->value--;
+    for ($i = 0; $i < 10; $i++, $obj->value--) {
     }
 }
 
 function test_static_property_post_inc_not_rewritten(): void {
-    for ($i = 0; $i < 10; $i++) {
-        StaticCounter::$count++;
+    for ($i = 0; $i < 10; $i++, StaticCounter::$count++) {
     }
 }
 
 function test_static_property_post_dec_not_rewritten(): void {
-    for ($i = 0; $i < 10; $i++) {
-        StaticCounter::$count--;
+    for ($i = 0; $i < 10; $i++, StaticCounter::$count--) {
     }
 }
 
 function test_array_element_post_inc_not_rewritten(): void {
     $arr = [0, 0, 0];
-    for ($i = 0; $i < 10; $i++) {
-        $arr[$i % 3]++;
+    for ($i = 0; $i < 10; $i++, $arr[$i % 3]++) {
     }
 }
 
 function test_array_element_post_dec_not_rewritten(): void {
     $arr = [10, 10, 10];
-    for ($i = 0; $i < 10; $i++) {
-        $arr[$i % 3]--;
+    for ($i = 0; $i < 10; $i++, $arr[$i % 3]--) {
     }
 }
