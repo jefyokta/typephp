@@ -26,7 +26,7 @@ trait ForeachTrait
                 if ($item->byRef) {
                     $this->fatalError($item, 'Foreach list destructuring cannot bind items by reference');
                 }
-                $key = $item->key ? $this->parseArrayKey($item->key) : (string) $k;
+                $key = $item->key ? $this->parseArrayKey($item->key, true) : (string) $k;
                 if ($item->value instanceof Expr\List_) {
                     $nestedTmpVar = $this->genTmpVarName();
                     $this->addLocalVar($nestedTmpVar, Type::VAR);

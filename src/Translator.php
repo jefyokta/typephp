@@ -1592,7 +1592,7 @@ CODE;
 
     public function getProjectNamespace(): string
     {
-        return $this->getModuleName();
+        return Constants::CPP_PROJECT_NAMESPACE_PREFIX . $this->targetName;
     }
 
     /**

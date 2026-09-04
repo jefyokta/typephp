@@ -1546,13 +1546,16 @@ class CompilerBase implements PropertyAccessContext
         return $list;
     }
 
-    protected function parseArrayKey(NodeAbstract $expr): string
+    protected function parseArrayKey(NodeAbstract $expr, bool $keepStringObject = false): string
     {
         $this->assertNotNativeObjectArrayKey($expr);
         $key = $this->parseIdentifier($expr);
         if (str_starts_with($key, self::LITERAL_STRING_GETTER . '(')) {
-            $key = "{$key}.str()";
-        } elseif ($this->isZeroLiteral($expr)) {
+            // Array initializers and setters use zend_string* keys, while item()
+            // uses php::String to avoid an ambiguous conversion to Variant.
+            return $keepStringObject ? $key : "{$key}.str()";
+        }
+        if ($this->isZeroLiteral($expr)) {
             $key = self::VALUE_ZERO;
         }
         return $key;

@@ -287,7 +287,7 @@ trait AssignOpTrait
                 continue;
             }
             if ($item instanceof ArrayItem) {
-                $key = $item->key ? $this->parseArrayKey($item->key) : (string) $k;
+                $key = $item->key ? $this->parseArrayKey($item->key, true) : (string) $k;
                 if ($item->value instanceof Expr\List_) {
                     $nestedTmp = $this->genTmpVarName();
                     $this->addLocalVar($nestedTmp, Type::ARRAY);
