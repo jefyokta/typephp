@@ -83,6 +83,10 @@ class FunctionContext
     public array $classEntryPtrs = [];
     /** Reusable php::CallableScope local, created only when this function performs scoped calls. */
     public ?string $callableScopeVar = null;
+    /** This function reads the late-static-bound class entry. */
+    public bool $needsCalledCe = false;
+    /** This function reads the late-static-bound class name. */
+    public bool $needsCalledClass = false;
     /** This generated body needs a temporary lexical scope on the nearest user-code frame. */
     public bool $needsUserCodeCallableScope = false;
     public int $tmpVarIndex = 0;
@@ -112,7 +116,7 @@ class FunctionContext
     public array $beforeStmtLines = [];
     public array $afterStmtLines = [];
     public array $objectProps;
-    /** Map of static property local slots. int/float keep stable zval* slots; other types use Var slots. */
+    /** Map of lazily resolved, function-local static-property zval slots. */
     public array $staticPropRefs = [];
     public int $scopeLevel = 0;
     /**
@@ -145,6 +149,8 @@ class FunctionContext
         $this->ceWrappers = [];
         $this->classEntryPtrs = [];
         $this->callableScopeVar = null;
+        $this->needsCalledCe = false;
+        $this->needsCalledClass = false;
         $this->tmpVarIndex = 0;
         $this->scopeLayouts = [];
         $this->callableScopeVar = null;
@@ -188,6 +194,8 @@ class FunctionContext
         $this->hoistedProps = [];
         $this->staticPropRefs = [];
         $this->classEntryPtrs = [];
+        $this->needsCalledCe = false;
+        $this->needsCalledClass = false;
         $this->scopeLayouts = [];
         $this->scopeLevel = 0;
         $this->inLoop = false;

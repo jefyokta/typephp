@@ -1,9 +1,11 @@
 # Static class cache benchmark
 
-This benchmark covers a common metadata-cache pattern: a static array keyed by
-`static::class`, guarded by `isset()`, plus a wrapper method using
-`static::method()`. It measures static-property lookup, array lookup, strict
-return checks, and late-static dispatch together.
+This benchmark contains isolated reads and writes of statically resolved
+`self::$property` and `Class::$property` slots. It also covers a common
+metadata-cache pattern: a static array keyed by `static::class`, guarded by
+`isset()`, plus a wrapper method using `static::method()`. The latter measures
+static-property lookup, array lookup, strict return checks, and late-static
+dispatch together.
 
 Run it from the repository root against matching Release PHP and PHPX builds:
 

@@ -10,6 +10,21 @@ It also measures dynamic method names with a stable receiver, alternating
 method names, and a fixed method name on changing receiver classes. Those
 cases require a class-entry guard in addition to a callable-name guard.
 
+The `named_method_dynamic_receiver*` cases specifically exercise
+`Variant::call(const Variant &, ...)`: the PHP method name is fixed, while the
+receiver's concrete class is hidden behind an `object` value. The monomorphic
+cases measure the cacheable path with zero and one argument; the polymorphic
+case guards against optimizing one runtime class as though it were static.
+
+The `scoped_*` cases exercise private/protected dynamic calls that must resolve
+with the compiled method's lexical scope. They are kept separate because a
+scoped cache must guard both the target callable and its calling scope.
+
+The `static_*_dynamic` cases exercise direct `$class::method()`,
+`Class::$method()`, and `$class::$method()` syntax. These sites still construct
+their callable string dynamically, but now reuse the request-local resolution
+slot instead of repeating `zend_is_callable_ex()` on every iteration.
+
 The monomorphic string-call cases cover zero, one, two, and four positional
 arguments. This separates callable-cache lookup cost from argument
 materialization cost and protects the small stack-argument fast path.

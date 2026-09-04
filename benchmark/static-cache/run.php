@@ -105,7 +105,7 @@ $typephpResult = parseStaticCacheResult(runStaticCacheCommand([$binary], $root, 
 echo "Runtime: {$phpRuntime}\n";
 echo "Metric        PHP ns/op  TypePHP ns/op  TypePHP/PHP\n";
 echo "--------------------------------------------------\n";
-foreach (['get_data', 'get_table'] as $case) {
+foreach (['explicit_read', 'self_read', 'self_write', 'get_data', 'get_table'] as $case) {
     $metric = $case . '_ns';
     $checksum = 'checksum_' . $case;
     if (!isset($phpResult[$metric], $typephpResult[$metric])) {

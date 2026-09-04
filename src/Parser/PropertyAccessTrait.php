@@ -419,7 +419,7 @@ trait PropertyAccessTrait
             }
             if ($resolution->expression !== null) {
                 // Dynamic target, e.g. `self` resolved through the called class inside a trait.
-                return Symbol::getStaticPropertyRef() . '(' . Symbol::getCalledCe() . ', ' . $property . ')';
+                return Symbol::getStaticPropertyRef() . '(' . $this->getCalledCeExpr() . ', ' . $property . ')';
             }
         }
 
@@ -462,7 +462,7 @@ trait PropertyAccessTrait
         }
         if ($class === 'self') {
             if ($this->classDef->trait) {
-                $expression = Symbol::getStaticProperty() . '(' . Symbol::getCalledCe() . ', ' . $this->getLiteralString($propertyName) . ')';
+                $expression = Symbol::getStaticProperty() . '(' . $this->getCalledCeExpr() . ', ' . $this->getLiteralString($propertyName) . ')';
                 return new StaticPropertyFetchTarget($propertyName, null, $expression);
             }
             return new StaticPropertyFetchTarget($propertyName, $this->getFullClassName(), null);
@@ -480,6 +480,29 @@ trait PropertyAccessTrait
 
     protected function parseNativeStaticPropertyFetch(Expr\StaticPropertyFetch $expr): ?string
     {
+        if ($this->isNameExpr($expr->class)
+            && $this->parseIdentifier($expr->class) === 'static'
+            && $this->isIdExpr($expr->name)
+        ) {
+            if ($this->classDef?->nativeObject) {
+                $this->fatalError(
+                    $expr,
+                    'Native classes do not support late static binding; use `self::` or a concrete class name',
+                );
+            }
+            if (!$this->methodDef) {
+                $this->fatalError($expr, "The 'static' keyword can only be used as the class name in class methods");
+            }
+            $propertyName = $this->parseIdentifier($expr->name);
+            $slot = $this->registerStaticPropertySlot(
+                'static::$' . $propertyName,
+                'typephp_get_static_property_slot(' . $this->getCalledCeExpr() . ', '
+                    . $this->getLiteralString($propertyName) . ')',
+            );
+            $this->setNativePropertyValueSource($expr, self::NATIVE_PROPERTY_VALUE_DYNAMIC);
+            return $slot;
+        }
+
         $resolution = $this->resolveNativeStaticPropertyFetch($expr);
         if ($resolution !== null) {
             $nativeProp = $resolution->expression;
@@ -492,8 +515,25 @@ trait PropertyAccessTrait
 
             if ($resolution->nativeProperty && $class !== null) {
                 $classPtr = $this->getClassEntryPtr($class);
+                $property = $this->parseIdentifier($expr->name);
+                $slot = $this->registerStaticPropertySlot(
+                    $class . '::$' . $property,
+                    'typephp_get_static_property_slot(' . $classPtr . ', ' . $nativeProp . ')',
+                );
                 $this->setNativePropertyValueSource($expr, self::NATIVE_PROPERTY_VALUE_DYNAMIC);
-                return Symbol::getResolvedStaticProperty() . '(' . $classPtr . ', ' . $nativeProp . ')';
+                return $slot;
+            } elseif ($resolution->expression !== null && $this->isIdExpr($expr->name)) {
+                // A trait's self::$property binds to the consuming class. The
+                // called CE is stable for this function invocation, just like
+                // static::$property, but not across separate invocations.
+                $propertyName = $this->parseIdentifier($expr->name);
+                $slot = $this->registerStaticPropertySlot(
+                    'trait-self::$' . $propertyName,
+                    'typephp_get_static_property_slot(' . $this->getCalledCeExpr() . ', '
+                        . $this->getLiteralString($propertyName) . ')',
+                );
+                $this->setNativePropertyValueSource($expr, self::NATIVE_PROPERTY_VALUE_DYNAMIC);
+                return $slot;
             } else {
                 $this->setNativePropertyValueSource($expr, self::NATIVE_PROPERTY_VALUE_DYNAMIC);
                 return $nativeProp;
@@ -510,29 +550,39 @@ trait PropertyAccessTrait
     ): string {
         $info = $this->getHoistedObjectPropInfo($def->type);
         $propName = $this->parseIdentifier($expr->name);
-        $refVar = '_static_' . str_replace('\\', '_', $class) . '_' . $propName;
-        $this->registerStaticPropertyRef($refVar, $class, $nativeProp, $info);
+        $classPtr = $this->getClassEntryPtr($class);
+        $slot = $this->registerStaticPropertySlot(
+            $class . '::$' . $propName,
+            'typephp_get_static_property_slot(' . $classPtr . ', ' . $nativeProp . ')',
+        );
 
         if ($info['kind'] === 'zval') {
             $helper = $def->type === Type::FLOAT ? 'typephp_static_float_ref' : 'typephp_static_int_ref';
-            return $helper . '(' . $refVar . ')';
+            return $helper . '(' . $slot . '.direct_ptr())';
         }
 
-        return $refVar;
+        return $slot;
     }
 
-    private function registerStaticPropertyRef(string $refVar, string $class, string $offsetExpr, array $info): void
+    /**
+     * Cache only the raw Zend static-property slot in the current C++ function
+     * invocation. Its value and reference/indirect state remain live and are
+     * deliberately re-read on every use.
+     */
+    private function registerStaticPropertySlot(string $key, string $resolver): string
     {
-        if (isset($this->context->staticPropRefs[$refVar])) {
-            return;
+        if (isset($this->context->staticPropRefs[$key])) {
+            return $this->context->staticPropRefs[$key]['accessorName'] . '()';
         }
 
-        $this->context->staticPropRefs[$refVar] = [
-            'type' => $info['type'],
-            'classPtr' => $this->getClassEntryPtr($class),
-            'offsetExpr' => $offsetExpr,
-            'kind' => $info['kind'],
+        $name = '_typephp_static_property_slot_' . count($this->context->staticPropRefs);
+        $accessorName = '_typephp_static_property_' . count($this->context->staticPropRefs);
+        $this->context->staticPropRefs[$key] = [
+            'name' => $name,
+            'accessorName' => $accessorName,
+            'resolver' => $resolver,
         ];
+        return $accessorName . '()';
     }
 
     protected function parseStaticPropertyFetch(Expr\StaticPropertyFetch $expr): string
@@ -598,7 +648,7 @@ trait PropertyAccessTrait
             if (!$this->methodDef) {
                 $this->fatalError($class, "The 'static' keyword can only be used as the class name in class methods");
             }
-            return Symbol::getCalledClass();
+            return $this->getCalledClassExpr();
         }
 
         return $this->getLiteralString($this->getNamespacedClassName($name));

@@ -5,9 +5,36 @@ function call_cache_target(int $value): int
     return $value + 1;
 }
 
-function call_cache_sites(mixed $callback, object $object, mixed $method): array
+function call_cache_sites(mixed $callback, object $object, ?object $nullable, mixed $method): array
 {
-    return [$callback(1), $object->$method(2)];
+    return [
+        $callback(1),
+        $object->$method(2),
+        $object->fixedMethod(3),
+        $nullable?->nullableMethod(4),
+    ];
+}
+
+function call_cache_known_internal_method(ArrayObject $object): int
+{
+    return $object->count();
+}
+
+class CallCacheStaticTarget
+{
+    public static function fixedMethod(int $value): int
+    {
+        return $value + 1;
+    }
+}
+
+function call_cache_static_sites(mixed $class, mixed $method): array
+{
+    return [
+        $class::$method(5),
+        CallCacheStaticTarget::$method(6),
+        $class::fixedMethod(7),
+    ];
 }
 
 class CallCacheScopedTarget

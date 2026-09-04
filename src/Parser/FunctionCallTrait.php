@@ -36,7 +36,8 @@ trait FunctionCallTrait
         }
 
         $callable = $this->parseExprAsValue($expr->right);
-        return 'php::call(' . $callable . ', {' . $value . '})';
+        return 'typephp_call_cached(' . $callable . ', ' . $this->getFunctionCallCache()
+            . ', {' . $value . '})';
     }
 
     /**

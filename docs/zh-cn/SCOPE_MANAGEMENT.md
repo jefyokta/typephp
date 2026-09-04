@@ -103,11 +103,11 @@ php::CallableScope tmp_var_1 = php::getCallableScope(
 
 ### 3.5 使用入口
 
-#### `php::callScoped()`
+#### `typephp_call_method_scoped_cached()`
 
-用于动态函数或对象方法调用。内部 `call_function_impl()` 使用 `CallableScope::resolve()` 获取 `zend_fcall_info_cache`，然后执行 `zend_call_function()`。
+用于动态对象方法调用。它使用 `CallableScope::resolve()` 获取 `zend_fcall_info_cache`，将允许缓存的结果保存在 request 级调用点 slot 中，然后执行 `zend_call_function()`。
 
-典型场景是编译器无法将对象方法解析为 Native Call，但仍需保留当前类的 private/protected 访问权。
+典型场景是编译器无法将对象方法解析为 Native Call，但仍需保留当前类的 private/protected 访问权。缓存命中必须同时匹配目标类、方法名、lexical scope、called scope 和调用方 `$this` 的类；trampoline 或发生变化的调用点仍执行完整 scoped resolution。
 
 #### `php::makeScopedCallable()`
 
@@ -287,9 +287,9 @@ fake_scope_guard.restore();
 ```text
 AOT method entry
   -> lazily generated CallableScope
-  -> php::callScoped()
-  -> CallableScope::resolve()
-  -> zend_is_callable_at_frame(synthetic frame)
+  -> typephp_call_method_scoped_cached()
+  -> 调用点缓存命中，或 CallableScope::resolve()
+  -> 缓存未命中时执行 zend_is_callable_at_frame(synthetic frame)
   -> zend_call_function()
 ```
 
@@ -345,7 +345,7 @@ save EG(fake_scope)
 | 路径 | 主要成本 | 优化策略 |
 | --- | --- | --- |
 | `CallableScope` | 初始化一个 synthetic frame | 每个 AOT 方法最多一次，循环复用 |
-| `callScoped()` | `zend_is_callable_at_frame()` 动态解析 | 仅动态调用使用；可解析的 Native Call 不进入此路径 |
+| `typephp_call_method_scoped_cached()` | 带 guard 的缓存查找；未命中时执行 `zend_is_callable_at_frame()` | 每个动态调用点一个 request 级 slot；可解析的 Native Call 不进入此路径 |
 | `prepareScopedCallback()` | 一次 callable 解析 | public 绝对 callback 不创建 Closure |
 | `makeScopedCallable()` | callable 解析及 Closure 分配 | 仅 first-class callable 使用 |
 | `UserCodeScopeGuard` | 方法入口一次指针查找、写入和退出恢复 | 只为 `call_user_func*`、callback map 或未解析的 unpack callback 生成 |

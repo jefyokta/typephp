@@ -103,11 +103,11 @@ If a method never uses scoped dynamic calls, first-class callables, or scoped ca
 
 ### 3.5 Usage Entry Points
 
-#### `php::callScoped()`
+#### `typephp_call_method_scoped_cached()`
 
-Used for dynamic function or object method calls. Internally, `call_function_impl()` uses `CallableScope::resolve()` to obtain a `zend_fcall_info_cache`, then executes `zend_call_function()`.
+Used for dynamic object method calls. It uses `CallableScope::resolve()` to obtain a `zend_fcall_info_cache`, retains cacheable results in a request-local call-site slot, then executes `zend_call_function()`.
 
-The typical scenario is when the compiler cannot resolve an object method into a Native Call, but still needs to preserve access to the current class's private/protected members.
+The typical scenario is when the compiler cannot resolve an object method into a Native Call, but still needs to preserve access to the current class's private/protected members. A hit must match the target class, method name, lexical scope, called scope, and caller `$this` class. Trampolines and changing call sites continue through full scoped resolution.
 
 #### `php::makeScopedCallable()`
 
@@ -287,9 +287,9 @@ Likewise, `EG(fake_scope)` must not be unconditionally set at the entry of every
 ```text
 AOT method entry
   -> lazily generated CallableScope
-  -> php::callScoped()
-  -> CallableScope::resolve()
-  -> zend_is_callable_at_frame(synthetic frame)
+  -> typephp_call_method_scoped_cached()
+  -> call-site cache hit, or CallableScope::resolve()
+  -> zend_is_callable_at_frame(synthetic frame) on cache miss
   -> zend_call_function()
 ```
 
@@ -345,7 +345,7 @@ save EG(fake_scope)
 | Path | Main Cost | Optimization Strategy |
 | --- | --- | --- |
 | `CallableScope` | Initializing one synthetic frame | At most once per AOT method, reused across loops |
-| `callScoped()` | Dynamic resolution by `zend_is_callable_at_frame()` | Used only for dynamic calls; resolvable Native Calls do not enter this path |
+| `typephp_call_method_scoped_cached()` | Guarded cache lookup; `zend_is_callable_at_frame()` on a miss | One request-local slot per dynamic call site; resolvable Native Calls do not enter this path |
 | `prepareScopedCallback()` | One callable resolution | Public absolute callbacks do not create a Closure |
 | `makeScopedCallable()` | Callable resolution and Closure allocation | Used only for first-class callables |
 | `UserCodeScopeGuard` | One pointer lookup and write at method entry, plus restoration at exit | Generated only for `call_user_func*`, callback maps, or unresolved unpack callbacks |

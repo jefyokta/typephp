@@ -487,7 +487,7 @@ trait MethodCallTrait
             $staticCall = (bool) ($this->methodDef->flags & Modifiers::STATIC);
         }
         if ($staticCall) {
-            $callable = Symbol::getCalledCe() . ', ' . $methodPtr;
+            $callable = $this->getCalledCeExpr() . ', ' . $methodPtr;
             if (empty($expr->args)) {
                 return 'php::call(' . $callable . ')';
             }
@@ -847,9 +847,11 @@ trait MethodCallTrait
             $magicMethod,
             $this->isVarExpr($expr->var) && $this->parseIdentifier($expr->var) === 'this_',
         );
+        $resolvedMethodPtr = false;
         if ($class && $funcName && !$magicMethod) {
             if ($this->isInternalClass($class)) {
                 $methodPtr = $this->getMethodPtr($class, $funcName);
+                $resolvedMethodPtr = true;
             } else {
                 $methodPtr = $method;
             }
@@ -859,9 +861,13 @@ trait MethodCallTrait
 
         if (empty($expr->args)) {
             if ($requiresDynamicScope && $this->methodDef) {
+                if (!$resolvedMethodPtr) {
+                    return 'typephp_call_method_scoped_cached(' . $object . ', ' . $methodPtr . ', '
+                        . $this->getCallableScopeExpr() . ', ' . $this->getMethodCallCache() . ')';
+                }
                 return 'php::callScoped(' . $object . ', ' . $methodPtr . ', ' . $this->getCallableScopeExpr() . ')';
             }
-            if (!$this->isNamedMethod($expr->name)) {
+            if (!$resolvedMethodPtr) {
                 return 'typephp_call_method_cached(' . $object . ', ' . $methodPtr . ', '
                     . $this->getMethodCallCache() . ')';
             }
@@ -869,9 +875,15 @@ trait MethodCallTrait
         }
         try {
             $class = empty($class) ? self::DYNAMIC_CALLED_CLASS : $class;
-            if (!$this->isNamedMethod($expr->name) && !($requiresDynamicScope && $this->methodDef)) {
+            if (!$resolvedMethodPtr) {
+                $callArgs = $this->parseCallArgs($expr->args, $funcName, $class);
+                if ($requiresDynamicScope && $this->methodDef) {
+                    return 'typephp_call_method_scoped_cached(' . $object . ', ' . $methodPtr . ', '
+                        . $this->getCallableScopeExpr() . ', ' . $this->getMethodCallCache() . ', '
+                        . $callArgs . ')';
+                }
                 return 'typephp_call_method_cached(' . $object . ', ' . $methodPtr . ', '
-                    . $this->getMethodCallCache() . ', ' . $this->parseCallArgs($expr->args) . ')';
+                    . $this->getMethodCallCache() . ', ' . $callArgs . ')';
             }
             return $this->genRuntimeObjectMethodCall(
                 $object,
@@ -994,7 +1006,7 @@ trait MethodCallTrait
             return null;
         }
 
-        $calledCe = Symbol::getCalledCe();
+        $calledCe = $this->getCalledCeExpr();
         $direct = 'php::Var(' . self::PREFIX . $nativeFunc . '(this_))';
         $fallback = 'php::call(' . $calledCe . ', php::getMethod(' . $calledCe . ', ' . $methodPtr . '))';
         return '(EXPECTED(' . $calledCe . ' == ' . $this->getClassEntryPtr($class) . ')'
@@ -1020,6 +1032,7 @@ trait MethodCallTrait
         $callScope = [];
         $rtFunc = '';
         $rtClass = '';
+        $cacheCallable = false;
         $canUseDirectCallScope = $this->isNameExpr($expr->class) && $this->isIdExpr($expr->name);
         $class = ($this->isNameExpr($expr->class) || $this->isVarExpr($expr->class))
             ? $this->parseIdentifier($expr->class)
@@ -1061,9 +1074,11 @@ trait MethodCallTrait
                 }
             }
             $placeHolder = $fn;
+            $cacheCallable = true;
         } elseif ($this->isVarExpr($expr->name)) {
             $fn = 'php::concat({' . $this->identifierToStr($expr->class) . ', "::", ' . $this->methodNameToStr($expr->name) . '})';
             $placeHolder = $fn;
+            $cacheCallable = true;
         } elseif ($class === 'static') {
             if ($this->classDef?->nativeObject) {
                 $this->fatalError(
@@ -1077,14 +1092,15 @@ trait MethodCallTrait
             if ($exactCall !== null) {
                 return $exactCall;
             }
-            $fn = Symbol::getCalledCe() . ', php::getMethod(' . Symbol::getCalledCe() . ', ' . $methodPtr . ')';
+            $calledCe = $this->getCalledCeExpr();
+            $fn = $calledCe . ', php::getMethod(' . $calledCe . ', ' . $methodPtr . ')';
             if ($this->debug) {
                 $this->context->beforeStmtLines[] = $this->formatCppLineComment(
                     'Static Method Call: ',
                     'static::' . $method . '()'
                 );
             }
-            $placeHolder = $this->genArray([Symbol::getCalledClass(), $methodPtr]);
+            $placeHolder = $this->genArray([$this->getCalledClassExpr(), $methodPtr]);
             // Used to resolve the method signature when detecting by-reference arguments (late static binding is resolved within the current class hierarchy)
             $rtFunc = $method;
             $rtClass = $this->getFullClassName();
@@ -1150,13 +1166,20 @@ trait MethodCallTrait
             // reusable handlers and never stores transient trampolines.
             $fn = $this->getLiteralString($class . '::' . $method);
             $placeHolder = $this->genArray($callScope);
+            $cacheCallable = true;
         }
 
-        $call = 'php::call';
         if (empty($expr->args)) {
-            return $call . '(' . $fn . ')';
+            if ($cacheCallable) {
+                return 'typephp_call_cached(' . $fn . ', ' . $this->getFunctionCallCache() . ')';
+            }
+            return 'php::call(' . $fn . ')';
         }
         try {
+            if ($cacheCallable) {
+                return 'typephp_call_cached(' . $fn . ', ' . $this->getFunctionCallCache() . ', '
+                    . $this->parseCallArgs($expr->args, $rtFunc, $rtClass) . ')';
+            }
             return $this->genRuntimeFunctionCall($fn, $expr->args, $rtFunc, $rtClass);
         } catch (PlaceHolder) {
             return $this->genPlaceHolder($placeHolder);

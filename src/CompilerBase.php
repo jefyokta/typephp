@@ -1327,6 +1327,21 @@ class CompilerBase implements PropertyAccessContext
         return 'typephp_get_function_call_cache(FunctionCallCacheId{' . $id . '})';
     }
 
+    /** Return the function-local late-static-bound class entry. */
+    protected function getCalledCeExpr(): string
+    {
+        $this->context->needsCalledCe = true;
+        return '_typephp_called_ce';
+    }
+
+    /** Return the function-local late-static-bound class name. */
+    protected function getCalledClassExpr(): string
+    {
+        $this->context->needsCalledCe = true;
+        $this->context->needsCalledClass = true;
+        return '_typephp_called_class';
+    }
+
     protected function getClassEntryPtr(string $className): string
     {
         $id = $this->getClassId($className);
@@ -3914,7 +3929,7 @@ class CompilerBase implements PropertyAccessContext
                     if ($this->classDef?->nativeObject) {
                         $this->fatalError($expr, 'Native classes do not support `new static()`');
                     }
-                    $cePtr = Symbol::getCalledCe();
+                    $cePtr = $this->getCalledCeExpr();
                 } else {
                     if ($className === 'self') {
                         $className = $this->getFullClassName();
@@ -4112,7 +4127,7 @@ class CompilerBase implements PropertyAccessContext
             if (!$this->classDef) {
                 $this->fatalError($class, 'Cannot use "static" outside a class');
             }
-            return Symbol::getCalledCe();
+            return $this->getCalledCeExpr();
         } else {
             $className = $this->getNamespacedClassName($className);
         }
@@ -4733,7 +4748,7 @@ class CompilerBase implements PropertyAccessContext
         if ($id === 'self') {
             $id = $this->getFullClassName();
         } elseif ($id === 'static') {
-            return Symbol::getCalledClass();
+            return $this->getCalledClassExpr();
         }
         if ($this->isNameExpr($node) or $this->isIdExpr($node)) {
             return $literal ? $this->getLiteralString($id) : $this->genCharPtr($id, true);
@@ -5220,6 +5235,16 @@ class CompilerBase implements PropertyAccessContext
                 . $this->getMethodPtr($this->getFullClassName(), $this->methodDef->name)
                 . ', this_);' . PHP_EOL;
         }
+        if ($this->context->needsCalledCe) {
+            $code .= $this->getIndent()
+                . 'zend_class_entry *const _typephp_called_ce = typephp_get_called_ce(this_);'
+                . PHP_EOL;
+        }
+        if ($this->context->needsCalledClass) {
+            $code .= $this->getIndent()
+                . 'const php::Str _typephp_called_class = typephp_get_called_class(_typephp_called_ce);'
+                . PHP_EOL;
+        }
         $code .= $this->genLocalVarDecl($this->context->localVars);
         foreach ($this->context->classEntryPtrs as $className => $entry) {
             $code .= $this->getIndent() . 'zend_class_entry *' . $entry . ' = '
@@ -5267,13 +5292,11 @@ class CompilerBase implements PropertyAccessContext
                 $code .= $this->getIndent() . $info['type'] . ' &' . $name . ' = ' . $zvalMacro . '(' . $info['getter'] . '.unwrap_ptr());' . PHP_EOL;
             }
         }
-        foreach ($this->context->staticPropRefs as $name => $info) {
-            $getter = Symbol::getStaticProperty() . '(' . $info['classPtr'] . ', ' . $info['offsetExpr'] . ')';
-            if (($info['kind'] ?? 'zval') === 'var') {
-                $code .= $this->getIndent() . Type::VAR . ' ' . $name . ' = ' . $getter . ';' . PHP_EOL;
-            } else {
-                $code .= $this->getIndent() . 'zval *' . $name . ' = ' . $getter . '.unwrap_ptr();' . PHP_EOL;
-            }
+        foreach ($this->context->staticPropRefs as $info) {
+            $code .= $this->getIndent() . 'zval *' . $info['name'] . ' = nullptr;' . PHP_EOL;
+            $code .= $this->getIndent() . 'const auto ' . $info['accessorName'] . ' = [&]() {'
+                . ' return typephp_get_static_property_cached(' . $info['name'] . ', [&]() {'
+                . ' return ' . $info['resolver'] . '; }); };' . PHP_EOL;
         }
         return $code;
     }

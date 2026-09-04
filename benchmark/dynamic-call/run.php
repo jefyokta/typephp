@@ -86,6 +86,7 @@ if (!$skipBuild) {
     echo "Building TypePHP benchmark (-O3 + LTO)...\n";
     runDynamicCallCommand([
         $compilerPhp,
+        '-n',
         $root . '/bin/tpc.php',
         $project,
         '-j',
@@ -135,11 +136,20 @@ $cases = [
     'closure_monomorphic',
     'closure_alternating',
     'static_method_string',
+    'static_class_dynamic',
+    'static_method_dynamic',
+    'static_class_method_dynamic',
     'object_method_array',
     'invokable_object',
     'method_name_monomorphic',
     'method_name_alternating',
     'method_receiver_polymorphic',
+    'named_method_dynamic_receiver_zero',
+    'named_method_dynamic_receiver',
+    'named_method_polymorphic_receiver',
+    'scoped_method_name_zero',
+    'scoped_method_name',
+    'scoped_named_dynamic_receiver',
 ];
 if ($selectedCase !== null && $selectedCase !== '') {
     $cases = [$selectedCase];
