@@ -4333,7 +4333,7 @@ CODE;
             $this->checkInterfaceImplementations($class);
             $this->checkInheritedConstantContracts($class);
             $this->checkInterfaceMethodCollisions($class);
-            $this->checkInheritedAbstractMethodsAreImplemented($class);
+            $this->checkAbstractMethodsAreImplemented($class);
         }
         $code = $this->genNativeMethod($methodCodes);
         if ($this->classDef->nativeObject) {
@@ -5750,6 +5750,12 @@ CODE;
                 if ($classDef->isAbstract()) {
                     continue;
                 }
+                // Enums cannot be abstract. Defer missing methods so Trait and
+                // interface requirements can be reported together with Zend's
+                // "Enum ... must implement N abstract methods" diagnostic.
+                if ($classDef->enum) {
+                    continue;
+                }
                 $this->fatalError($node, "Class `{$classDef->getNamespacedName(false)}` must implement method `{$interfaceName}::{$interfaceMethodDef->name}()`");
             }
             $this->validateMethodOverrideSignature(
@@ -5892,11 +5898,34 @@ CODE;
         }
     }
 
-    private function checkInheritedAbstractMethodsAreImplemented(NodeAbstract $node): void
+    private function checkAbstractMethodsAreImplemented(NodeAbstract $node): void
     {
         $classDef = $this->classDef;
         if ($classDef->isAbstract()) {
             return;
+        }
+
+        if ($classDef->enum) {
+            $missing = $this->collectMissingEnumAbstractMethods($classDef);
+            if ($missing !== []) {
+                $count = count($missing);
+                $noun = $count === 1 ? 'method' : 'methods';
+                $this->fatalError(
+                    $node,
+                    "Enum {$classDef->getNamespacedName(false)} must implement {$count} abstract {$noun} (" .
+                    implode(', ', $missing) . ')',
+                );
+            }
+        } elseif ($classDef->abstractMethodDefs !== []) {
+            foreach ($classDef->abstractMethodDefs as $methodDef) {
+                if ($this->findClassMethodDef($classDef, $methodDef->name, false) === null) {
+                    $this->fatalError(
+                        $node,
+                        "Class `{$classDef->getNamespacedName(false)}` must implement abstract method " .
+                        "`{$classDef->getNamespacedName(false)}::{$methodDef->name}()`",
+                    );
+                }
+            }
         }
 
         $current = $classDef;
@@ -5912,6 +5941,51 @@ CODE;
             }
             $current = $parent;
         }
+    }
+
+    /** @return list<string> */
+    private function collectMissingEnumAbstractMethods(ClassDef $enum): array
+    {
+        /** @var array<string, string> $requirements */
+        $requirements = [];
+        $enumName = $enum->getNamespacedName(false);
+        foreach ($enum->abstractMethodDefs as $methodDef) {
+            $name = strtolower($methodDef->name);
+            if ($this->findClassMethodDef($enum, $methodDef->name, false) === null) {
+                $requirements[$name] = "{$enumName}::{$methodDef->name}";
+            }
+        }
+
+        foreach ($this->getClassImplementedInterfaces($enum) as $interfaceName) {
+            if ($this->isInternalInterface($interfaceName)) {
+                $interface = Reflection::getClass($interfaceName);
+                if ($interface === null) {
+                    continue;
+                }
+                foreach ($interface->getMethods() as $method) {
+                    $name = strtolower($method->getName());
+                    if (!isset($requirements[$name])
+                        && $this->findClassMethodDef($enum, $method->getName(), false) === null
+                    ) {
+                        $requirements[$name] = $method->getDeclaringClass()->getName() . '::' . $method->getName();
+                    }
+                }
+                continue;
+            }
+            if (!$this->hasInterface($interfaceName)) {
+                continue;
+            }
+            foreach ($this->getInterface($interfaceName)->methods as $methodDef) {
+                $name = strtolower($methodDef->name);
+                if (!isset($requirements[$name])
+                    && $this->findClassMethodDef($enum, $methodDef->name, false) === null
+                ) {
+                    $requirements[$name] = "{$interfaceName}::{$methodDef->name}";
+                }
+            }
+        }
+
+        return array_values($requirements);
     }
 
     private function getVisibilityRank(int $flags): int

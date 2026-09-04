@@ -2487,6 +2487,10 @@ class Preprocessor extends CompilerBase
         $this->assertEnumMayIncludeMethod($v, $name);
         $flags = $this->parseModifiers($v->flags);
         $abstract = $flags & Modifiers::ABSTRACT;
+        if ($class instanceof Node\Stmt\Enum_ && $abstract) {
+            $enumName = $this->classDef->getNamespacedName(false);
+            $this->fatalError($v, "Enum method {$enumName}::{$name}() must not be abstract");
+        }
         if ($this->classDef->nativeObject && ($flags & Modifiers::STATIC)) {
             $this->fatalError($v, 'Native class static methods are not supported');
         }

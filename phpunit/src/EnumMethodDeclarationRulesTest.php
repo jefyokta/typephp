@@ -143,6 +143,169 @@ PHP;
         $compiler->composeTraitDeclarations([$file]);
     }
 
+    public function testEnumCannotDeclareAbstractMethod(): void
+    {
+        $source = <<<'PHP'
+<?php
+enum Suit
+{
+    case Hearts;
+    abstract public function label(): string;
+}
+
+function main(): void {}
+PHP;
+
+        [$compiler, $file] = $this->compilerFor($source);
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('Enum method Suit::label() must not be abstract');
+        $compiler->prepareFile($file);
+    }
+
+    public function testEnumMustImplementAbstractMethodImportedFromTrait(): void
+    {
+        $source = <<<'PHP'
+<?php
+trait Labeled
+{
+    abstract public function label(): string;
+}
+
+enum Suit
+{
+    use Labeled;
+    case Hearts;
+}
+
+function main(): void {}
+PHP;
+
+        [$compiler, $file] = $this->compilerFor($source);
+        $compiler->prepareFile($file);
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('Enum Suit must implement 1 abstract method (Suit::label)');
+        $compiler->convertFile($file);
+    }
+
+    public function testEnumMayImplementAbstractTraitMethod(): void
+    {
+        $source = <<<'PHP'
+<?php
+trait Labeled
+{
+    abstract public function label(): string;
+}
+
+enum Suit
+{
+    use Labeled;
+    case Hearts;
+
+    public function label(): string
+    {
+        return $this->name;
+    }
+}
+
+function main(): void {}
+PHP;
+
+        [$compiler, $file] = $this->compilerFor($source);
+        $compiler->prepareFile($file);
+        $compiler->convertFile($file);
+
+        self::assertFileExists($compiler->getCppFile($file));
+    }
+
+    public function testEnumMayImplementInterface(): void
+    {
+        $source = <<<'PHP'
+<?php
+interface Labeled
+{
+    public function label(): string;
+}
+
+enum Suit implements Labeled
+{
+    case Hearts;
+
+    public function label(): string
+    {
+        return $this->name;
+    }
+}
+
+function main(): void {}
+PHP;
+
+        [$compiler, $file] = $this->compilerFor($source);
+        $compiler->prepareFile($file);
+        $compiler->convertFile($file);
+
+        self::assertFileExists($compiler->getCppFile($file));
+    }
+
+    public function testEnumMustImplementInterfaceMethod(): void
+    {
+        $source = <<<'PHP'
+<?php
+interface Labeled
+{
+    public function label(): string;
+}
+
+enum Suit implements Labeled
+{
+    case Hearts;
+}
+
+function main(): void {}
+PHP;
+
+        [$compiler, $file] = $this->compilerFor($source);
+        $compiler->prepareFile($file);
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('Enum Suit must implement 1 abstract method (Labeled::label)');
+        $compiler->convertFile($file);
+    }
+
+    public function testEnumReportsTraitAndInterfaceAbstractMethodsTogether(): void
+    {
+        $source = <<<'PHP'
+<?php
+trait Labeled
+{
+    abstract public function label(): string;
+}
+
+interface SerializableName
+{
+    public function serializedName(): string;
+}
+
+enum Suit implements SerializableName
+{
+    use Labeled;
+    case Hearts;
+}
+
+function main(): void {}
+PHP;
+
+        [$compiler, $file] = $this->compilerFor($source);
+        $compiler->prepareFile($file);
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage(
+            'Enum Suit must implement 2 abstract methods (Suit::label, SerializableName::serializedName)',
+        );
+        $compiler->convertFile($file);
+    }
+
     public function testCallCallStaticAndInvokeRemainAllowed(): void
     {
         $source = <<<'PHP'
