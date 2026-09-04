@@ -3111,9 +3111,10 @@ class Preprocessor extends CompilerBase
 
     protected function parseTraitUseOptions(Node\Stmt\TraitUse $traitUse, array &$aliases, array &$ignored): void
     {
-        foreach ($traitUse->adaptations as $adaptation) {
+        foreach ($traitUse->adaptations as $index => $adaptation) {
             if ($adaptation instanceof Node\Stmt\TraitUseAdaptation\Alias) {
                 $traits = [];
+                $requestedTrait = null;
                 if (!$adaptation->trait) {
                     // use THello1, THello2 {
                     //    hello as hello3;
@@ -3122,16 +3123,21 @@ class Preprocessor extends CompilerBase
                     $traits = $traitUse->traits;
                 } else {
                     $traits[] = $adaptation->trait;
+                    $requestedTrait = $this->getNamespacedClassName($this->parseIdentifier($adaptation->trait));
                 }
+                $methodName = $adaptation->method->toString();
+                $group = $traitUse->getStartFilePos() . ':' . $index;
                 foreach ($traits as $trait) {
                     $traitName = $this->getNamespacedClassName($this->parseIdentifier($trait));
-                    $methodName = $adaptation->method->toString();
                     /*
                      * For example:
                      * use TraitA { TraitA::method as newMethod}
                      * This means TraitA::method() is renamed to TraitA::newMethod()
                      */
                     $aliases[$this->getFullMethodName($traitName, $methodName)][] = [
+                        'group' => $group,
+                        'trait' => $requestedTrait,
+                        'method' => $methodName,
                         'newName' => $adaptation->newName ? $adaptation->newName->toString() : $methodName,
                         'newModifier' => $adaptation->newModifier ?: 0,
                     ];
@@ -3142,14 +3148,19 @@ class Preprocessor extends CompilerBase
                     $this->fatalError($traitUse, 'Trait precedence cannot be used without a trait');
                 }
                 $methodName = $adaptation->method->toString();
+                $winnerTrait = $this->getNamespacedClassName($this->parseIdentifier($adaptation->trait));
                 /*
                  * For example:
                  * use TraitA { TraitA::method insteadof TraitB}
                  * This means TraitB::method() is ignored, and TraitA::method() is actually executed
                  */
                 foreach ($adaptation->insteadof as $trait2) {
-                    $traitName = $this->getNamespacedClassName($this->parseIdentifier($trait2));
-                    $ignored[$this->getFullMethodName($traitName, $methodName)] = true;
+                    $loserTrait = $this->getNamespacedClassName($this->parseIdentifier($trait2));
+                    $ignored[$this->getFullMethodName($loserTrait, $methodName)][] = [
+                        'winnerTrait' => $winnerTrait,
+                        'loserTrait' => $loserTrait,
+                        'method' => $methodName,
+                    ];
                 }
             }
         }
@@ -3174,6 +3185,10 @@ class Preprocessor extends CompilerBase
                 $this->classDef->traitAliases[$fullMethodName][] = $alias;
             }
         }
-        $this->classDef->traitIgnored = array_merge($this->classDef->traitIgnored, $ignored);
+        foreach ($ignored as $fullMethodName => $rules) {
+            foreach ($rules as $rule) {
+                $this->classDef->traitIgnored[$fullMethodName][] = $rule;
+            }
+        }
     }
 }

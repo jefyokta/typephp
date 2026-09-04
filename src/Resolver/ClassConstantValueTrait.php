@@ -279,10 +279,15 @@ trait ClassConstantValueTrait
         return $value;
     }
 
-    private function evaluateCompileTimeExpression(Node\Expr $expression, ClassLikeDef $scope): mixed
+    private function evaluateCompileTimeExpression(
+        Node\Expr $expression,
+        ClassLikeDef $scope,
+        ?ClassLikeDef $lateBoundScope = null,
+    ): mixed
     {
+        $lateBoundScope ??= $scope;
         $evaluator = null;
-        $evaluator = new ConstExprEvaluator(function (Node\Expr $expr) use (&$evaluator, $scope): mixed {
+        $evaluator = new ConstExprEvaluator(function (Node\Expr $expr) use (&$evaluator, $scope, $lateBoundScope): mixed {
             if ($expr instanceof Node\Expr\Cast) {
                 $value = $evaluator->evaluateDirectly($expr->expr);
                 return match (true) {
@@ -300,17 +305,39 @@ trait ClassConstantValueTrait
             }
 
             if ($expr instanceof Node\Expr\ClassConstFetch && $expr->class instanceof Node\Name) {
-                $class = $this->resolveCompileTimeClassName($expr->class, $scope);
                 $name = $expr->name instanceof Node\Identifier
                     ? $expr->name->toString()
                     : $evaluator->evaluateDirectly($expr->name);
                 if (!is_string($name)) {
                     throw new \RuntimeException('A compile-time class constant name must evaluate to string');
                 }
+                $class = $this->resolveCompileTimeClassName($expr->class, $scope, $lateBoundScope);
                 if (strcasecmp($name, 'class') === 0) {
                     return ltrim($class, '\\');
                 }
-                $value = $this->evaluateCompileTimeClassConstantFetch($expr, $class, $name, $scope);
+                // A Trait's self::CONST first refers to a constant declared by
+                // that Trait template. If it has no such declaration, resolve
+                // it against the consuming class (including its parents).
+                if (strcasecmp($expr->class->toString(), 'self') === 0
+                    && $scope instanceof ClassDef
+                    && $scope->trait !== null
+                    && $scope->hasConstant($name)
+                ) {
+                    $value = $this->evaluateCompileTimeClassConstant(
+                        $expr,
+                        $scope,
+                        $scope->getConstant($name),
+                        $name,
+                        $lateBoundScope,
+                    );
+                } else {
+                    $value = $this->evaluateCompileTimeClassConstantFetch(
+                        $expr,
+                        $class,
+                        $name,
+                        $scope,
+                    );
+                }
                 if ($value instanceof EnumCaseRef && $this->isEnumCaseBackingEvaluationInProgress($value)) {
                     $this->fatalError(
                         $expr,
@@ -349,7 +376,7 @@ trait ClassConstantValueTrait
             }
 
             if ($expr instanceof Node\Scalar\MagicConst) {
-                return $this->evaluateCompileTimeMagicConstant($expr, $scope);
+                return $this->evaluateCompileTimeMagicConstant($expr, $scope, $lateBoundScope);
             }
 
             throw new \RuntimeException("Expression `{$expr->getType()}` is not compile-time evaluable");
@@ -381,6 +408,10 @@ trait ClassConstantValueTrait
                         $classDef,
                         $classDef->getConstant($name),
                         $name,
+                        // An explicit TraitName::CONST fetch evaluates in the
+                        // Trait's own scope. Only a copied member's self::
+                        // path above carries the consuming-class scope.
+                        $classDef,
                     );
                 }
                 $current = ltrim($classDef->extends, '\\');
@@ -391,7 +422,7 @@ trait ClassConstantValueTrait
             $constant = $this->findCompileTimeInterfaceConstant($class, $name);
             if ($constant !== null) {
                 [$interface, $constantDef] = $constant;
-                return $this->evaluateCompileTimeClassConstant($origin, $interface, $constantDef, $name);
+                return $this->evaluateCompileTimeClassConstant($origin, $interface, $constantDef, $name, $interface);
             }
         }
 
@@ -408,6 +439,7 @@ trait ClassConstantValueTrait
         ClassLikeDef $scope,
         ConstantDef $constant,
         string $name,
+        ?ClassLikeDef $lateBoundScope = null,
     ): mixed {
         if (!$constant->valueExpr instanceof Node\Expr) {
             throw new \RuntimeException(
@@ -425,7 +457,7 @@ trait ClassConstantValueTrait
 
         $this->classConstantEvaluationsInProgress[$key] = true;
         try {
-            return $this->evaluateCompileTimeExpression($constant->valueExpr, $scope);
+            return $this->evaluateCompileTimeExpression($constant->valueExpr, $scope, $lateBoundScope);
         } finally {
             unset($this->classConstantEvaluationsInProgress[$key]);
         }
@@ -521,17 +553,21 @@ trait ClassConstantValueTrait
         }
     }
 
-    private function resolveCompileTimeClassName(Node\Name $name, ClassLikeDef $scope): string
+    private function resolveCompileTimeClassName(
+        Node\Name $name,
+        ClassLikeDef $scope,
+        ClassLikeDef $lateBoundScope,
+    ): string
     {
         $raw = $name->toString();
         if (strcasecmp($raw, 'self') === 0) {
-            return '\\' . $scope->getNamespacedName(false);
+            return '\\' . $lateBoundScope->getNamespacedName(false);
         }
         if (strcasecmp($raw, 'parent') === 0) {
-            if ($scope->extends === '') {
+            if ($lateBoundScope->extends === '') {
                 throw new \RuntimeException('Cannot use parent:: without a parent class');
             }
-            return '\\' . ltrim($scope->extends, '\\');
+            return '\\' . ltrim($lateBoundScope->extends, '\\');
         }
         if (strcasecmp($raw, 'static') === 0) {
             throw new \RuntimeException('static:: is not compile-time evaluable');
@@ -571,17 +607,23 @@ trait ClassConstantValueTrait
         ]);
     }
 
-    private function evaluateCompileTimeMagicConstant(Node\Scalar\MagicConst $expr, ClassLikeDef $scope): int|string
+    private function evaluateCompileTimeMagicConstant(
+        Node\Scalar\MagicConst $expr,
+        ClassLikeDef $scope,
+        ClassLikeDef $lateBoundScope,
+    ): int|string
     {
         return match (true) {
             $expr instanceof Node\Scalar\MagicConst\Line => $expr->getStartLine(),
             $expr instanceof Node\Scalar\MagicConst\File => $scope->sourceFile,
             $expr instanceof Node\Scalar\MagicConst\Dir => dirname($scope->sourceFile),
-            $expr instanceof Node\Scalar\MagicConst\Class_ => $scope->getNamespacedName(false),
+            $expr instanceof Node\Scalar\MagicConst\Class_ => $lateBoundScope->getNamespacedName(false),
             $expr instanceof Node\Scalar\MagicConst\Namespace_ => $scope->namespace,
             $expr instanceof Node\Scalar\MagicConst\Method,
-            $expr instanceof Node\Scalar\MagicConst\Function_,
-            $expr instanceof Node\Scalar\MagicConst\Trait_ => '',
+            $expr instanceof Node\Scalar\MagicConst\Function_ => '',
+            $expr instanceof Node\Scalar\MagicConst\Trait_ => $scope instanceof ClassDef && $scope->trait !== null
+                ? $scope->getNamespacedName(false)
+                : '',
             default => throw new \RuntimeException("Magic constant `{$expr->getType()}` is not compile-time evaluable"),
         };
     }

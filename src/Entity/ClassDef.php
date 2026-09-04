@@ -88,13 +88,24 @@ class ClassDef extends ClassLikeDef
 
     /**
      * FullMethodName -> alias list
-     * @var array<string, array<int, array{newName: string, newModifier: int}>>
+     * @var array<string, list<array{
+     *     group: string,
+     *     trait: string|null,
+     *     method: string,
+     *     newName: string,
+     *     newModifier: int
+     * }>>
      */
     public array $traitAliases = [];
 
     /**
-     * FullMethodName -> true
-     * @var array<string, bool>
+     * Excluded FullMethodName -> precedence rules.
+     *
+     * A list is required here: PHP rejects excluding the same method more
+     * than once, so overwriting duplicate rules would hide an invalid
+     * declaration before the composition phase can diagnose it.
+     *
+     * @var array<string, list<array{winnerTrait: string, loserTrait: string, method: string}>>
      */
     public array $traitIgnored = [];
     public int $flags;

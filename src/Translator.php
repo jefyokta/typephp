@@ -27,6 +27,7 @@ use TypePhp\Entity\ArgInfo;
 use TypePhp\Entity\ClassDef;
 use TypePhp\Entity\ClassLikeDef;
 use TypePhp\Entity\ConstantDef;
+use TypePhp\Entity\EnumCaseRef;
 use TypePhp\Entity\FunctionDef;
 use TypePhp\Entity\InterfaceDef;
 use TypePhp\Entity\InterfacePropertyDef;
@@ -35,6 +36,7 @@ use TypePhp\Entity\PropertyDef;
 use TypePhp\Exception\Redo;
 use TypePhp\Exception\Skip;
 use TypePhp\Exception\SyntaxError;
+use TypePhp\Exception\TestError;
 use TypePhp\Generator\DefaultArgumentGenerator;
 use TypePhp\Generator\LibraryImportStubGenerator;
 use TypePhp\Generator\Symbol;
@@ -3311,6 +3313,7 @@ CODE;
         $traitMethods = [];
         $traitConstants = [];
         $traitProperties = [];
+        $seenTraitMethods = [];
         $classDef = $this->getClass($className->toString());
         $usingClassDef = $classDef;
         $compositionOwner = $classDef->getNamespacedName(false);
@@ -3369,6 +3372,7 @@ CODE;
                             $traitStmt->setAttribute(self::TRAIT_METHOD_ATTRIBUTE, $traitStmt->name->toString());
                         }
                         $fullMethodName = $this->getFullMethodName($traitFullName, $methodName);
+                        $seenTraitMethods[$fullMethodName] = true;
                         // A trait method's `self`/`static`/`parent` return and parameter
                         // types refer to the class that uses the trait, not the trait
                         // itself. Re-resolve them on the cloned AST so the generated
@@ -3518,9 +3522,20 @@ CODE;
                             }
                             if (isset($traitConstants[$constName])) {
                                 [$existingConstStmt, $existingConst] = $traitConstants[$constName];
+                                $existingOrigin = (string) $existingConstStmt->getAttribute(
+                                    self::TRAIT_ORIGIN_ATTRIBUTE,
+                                    $traitFullName,
+                                );
                                 if ($existingConstStmt->flags !== $traitStmt->flags ||
                                     $this->typeNodeToStringOrNull($existingConstStmt->type) !== $this->typeNodeToStringOrNull($traitStmt->type) ||
-                                    $this->printer->prettyPrintExpr($existingConst->value) !== $this->printer->prettyPrintExpr($const->value)) {
+                                    !$this->traitMemberExpressionsAreIdentical(
+                                        $existingConst->value,
+                                        $existingOrigin,
+                                        $const->value,
+                                        $traitFullName,
+                                        $usingClassDef,
+                                        $this->typeNodeToStringOrNull($traitStmt->type),
+                                    )) {
                                     $this->fatalError($classStmt, "Trait `{$traitFullName}` constant `{$constName}` already exists");
                                 }
                                 unset($traitStmt->consts[$k2]);
@@ -3547,11 +3562,20 @@ CODE;
                             }
                             if (isset($traitProperties[$propName])) {
                                 [$existingPropStmt, $existingProp] = $traitProperties[$propName];
-                                $existingDefault = $existingProp->default ? $this->printer->prettyPrintExpr($existingProp->default) : null;
-                                $propDefault = $prop->default ? $this->printer->prettyPrintExpr($prop->default) : null;
+                                $existingOrigin = (string) $existingPropStmt->getAttribute(
+                                    self::TRAIT_ORIGIN_ATTRIBUTE,
+                                    $traitFullName,
+                                );
                                 if ($existingPropStmt->flags !== $traitStmt->flags ||
                                     $this->typeNodeToStringOrNull($existingPropStmt->type) !== $this->typeNodeToStringOrNull($traitStmt->type) ||
-                                    $existingDefault !== $propDefault) {
+                                    !$this->traitMemberExpressionsAreIdentical(
+                                        $existingProp->default,
+                                        $existingOrigin,
+                                        $prop->default,
+                                        $traitFullName,
+                                        $usingClassDef,
+                                        $this->typeNodeToStringOrNull($traitStmt->type),
+                                    )) {
                                     $this->fatalError($classStmt, "Trait `{$traitFullName}` property `{$propName}` already exists");
                                 }
                                 unset($traitStmt->props[$k2]);
@@ -3584,6 +3608,95 @@ CODE;
             }
         }
 
+        $this->validateTraitAdaptations($stmt, $classDef, $seenTraitMethods);
+    }
+
+    /**
+     * Validate adaptation declarations after all directly used traits have
+     * been expanded. Preprocessing intentionally cannot do this: a referenced
+     * trait may be declared in a source file prepared later.
+     *
+     * @param array<string, true> $seenTraitMethods
+     */
+    private function validateTraitAdaptations(
+        Node\Stmt\ClassLike $origin,
+        ClassDef $classDef,
+        array $seenTraitMethods,
+    ): void {
+        $usedTraits = [];
+        foreach ($classDef->usedTraits as $trait) {
+            $usedTraits[strtolower($trait)] = $trait;
+        }
+
+        $aliasGroups = [];
+        foreach ($classDef->traitAliases as $fullMethodName => $aliases) {
+            foreach ($aliases as $alias) {
+                $group = $alias['group'];
+                $aliasGroups[$group] ??= [
+                    'trait' => $alias['trait'],
+                    'method' => $alias['method'],
+                    'candidates' => [],
+                ];
+                $aliasGroups[$group]['candidates'][$fullMethodName] = true;
+            }
+        }
+
+        foreach ($aliasGroups as $alias) {
+            $requestedTrait = $alias['trait'];
+            if ($requestedTrait !== null && !isset($usedTraits[strtolower($requestedTrait)])) {
+                $this->fatalError(
+                    $origin,
+                    "Required Trait `{$requestedTrait}` wasn't added to `{$classDef->getNamespacedName(false)}`",
+                );
+            }
+
+            $matches = 0;
+            foreach ($alias['candidates'] as $fullMethodName => $_) {
+                if (isset($seenTraitMethods[$fullMethodName])) {
+                    $matches++;
+                }
+            }
+            if ($matches === 0) {
+                $qualifier = $requestedTrait !== null ? "{$requestedTrait}::" : '';
+                $this->fatalError(
+                    $origin,
+                    "An alias was defined for method `{$qualifier}{$alias['method']}()`, but this method does not exist",
+                );
+            }
+            if ($requestedTrait === null && $matches > 1) {
+                $this->fatalError(
+                    $origin,
+                    "An alias was defined for method `{$alias['method']}()`, which exists in multiple traits; qualify the source trait",
+                );
+            }
+        }
+
+        foreach ($classDef->traitIgnored as $fullMethodName => $rules) {
+            foreach ($rules as $rule) {
+                foreach (['winnerTrait', 'loserTrait'] as $role) {
+                    $trait = $rule[$role];
+                    if (!isset($usedTraits[strtolower($trait)])) {
+                        $this->fatalError(
+                            $origin,
+                            "Required Trait `{$trait}` wasn't added to `{$classDef->getNamespacedName(false)}`",
+                        );
+                    }
+                }
+                $winnerMethod = $this->getFullMethodName($rule['winnerTrait'], $rule['method']);
+                if (!isset($seenTraitMethods[$winnerMethod])) {
+                    $this->fatalError(
+                        $origin,
+                        "A precedence rule was defined for `{$rule['winnerTrait']}::{$rule['method']}()`, but this method does not exist",
+                    );
+                }
+            }
+            if (count($rules) > 1) {
+                $this->fatalError(
+                    $origin,
+                    "Failed to evaluate trait precedence for `{$rules[0]['method']}()`: method `{$fullMethodName}` was excluded multiple times",
+                );
+            }
+        }
     }
 
     /**
@@ -3598,6 +3711,76 @@ CODE;
             $flags &= ~Modifiers::VISIBILITY_MASK;
         }
         return $flags | $newModifier;
+    }
+
+    private function traitMemberExpressionsAreIdentical(
+        ?Node\Expr $left,
+        string $leftOrigin,
+        ?Node\Expr $right,
+        string $rightOrigin,
+        ClassDef $usingClass,
+        ?string $declaredType,
+    ): bool {
+        if ($left === null || $right === null) {
+            return $left === $right;
+        }
+
+        try {
+            $leftValue = $this->evaluateTraitMemberExpression($left, $leftOrigin, $usingClass);
+            $rightValue = $this->evaluateTraitMemberExpression($right, $rightOrigin, $usingClass);
+            if ($declaredType === 'float' || $declaredType === Type::FLOAT) {
+                $leftValue = is_int($leftValue) ? (float) $leftValue : $leftValue;
+                $rightValue = is_int($rightValue) ? (float) $rightValue : $rightValue;
+            }
+            return $this->compileTimeValuesAreIdentical($leftValue, $rightValue);
+        } catch (TestError $error) {
+            throw $error;
+        } catch (\Throwable) {
+            // Keep compatibility with expressions accepted by the lowering
+            // pipeline but not yet understood by the compile-time evaluator.
+            // Identical source remains safe; non-identical source remains a
+            // conflict until its semantics can be proven.
+            return $this->printer->prettyPrintExpr($left) === $this->printer->prettyPrintExpr($right);
+        }
+    }
+
+    private function evaluateTraitMemberExpression(
+        Node\Expr $expression,
+        string $origin,
+        ClassDef $usingClass,
+    ): mixed {
+        if ($origin !== '' && $this->hasClass($origin)) {
+            $scope = $this->getClass($origin);
+            if ($scope->trait !== null) {
+                return $this->withTraitNameContext(
+                    $origin,
+                    fn(): mixed => $this->evaluateCompileTimeExpression($expression, $scope, $usingClass),
+                );
+            }
+        }
+        return $this->evaluateCompileTimeExpression($expression, $usingClass, $usingClass);
+    }
+
+    private function compileTimeValuesAreIdentical(mixed $left, mixed $right): bool
+    {
+        if ($left instanceof EnumCaseRef || $right instanceof EnumCaseRef) {
+            return $left instanceof EnumCaseRef
+                && $right instanceof EnumCaseRef
+                && strcasecmp($left->enumClass, $right->enumClass) === 0
+                && $left->caseName === $right->caseName;
+        }
+        if (is_array($left) || is_array($right)) {
+            if (!is_array($left) || !is_array($right) || array_keys($left) !== array_keys($right)) {
+                return false;
+            }
+            foreach ($left as $key => $value) {
+                if (!$this->compileTimeValuesAreIdentical($value, $right[$key])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        return $left === $right;
     }
 
     /**
@@ -6818,7 +7001,11 @@ CODE;
             $traitDef = $this->getClass($traitFullName);
             foreach ($traitDef->constants as $const) {
                 if ($classDef->hasConstant($const->name)) {
-                    if (!$this->isCompatibleTraitConstant($classDef->getConstant($const->name), $const)) {
+                    if (!$this->isCompatibleTraitConstant(
+                        $classDef->getConstant($const->name),
+                        $const,
+                        $traitFullName,
+                    )) {
                         $this->fatalError($v, "Trait `{$traitFullName}` constant `{$const->name}` conflicts with class `{$classDef->getNamespacedName(false)}`");
                     }
                     continue;
@@ -6833,7 +7020,11 @@ CODE;
                     );
                 }
                 if ($classDef->hasProperty($prop->name)) {
-                    if (!$this->isCompatibleTraitProperty($classDef->getProperty($prop->name), $prop)) {
+                    if (!$this->isCompatibleTraitProperty(
+                        $classDef->getProperty($prop->name),
+                        $prop,
+                        $traitFullName,
+                    )) {
                         $this->fatalError($v, "Trait `{$traitFullName}` property `{$prop->name}` conflicts with class `{$classDef->getNamespacedName(false)}`");
                     }
                     continue;
@@ -6964,22 +7155,70 @@ CODE;
         }
     }
 
-    private function isCompatibleTraitConstant(ConstantDef $existing, ConstantDef $incoming): bool
+    private function isCompatibleTraitConstant(
+        ConstantDef $existing,
+        ConstantDef $incoming,
+        string $incomingOrigin,
+    ): bool
     {
+        if ($existing->flags !== $incoming->flags
+            || $existing->type !== $incoming->type
+            || $existing->class !== $incoming->class
+        ) {
+            return false;
+        }
+
+        $existingOrigin = $existing->traitOrigin !== ''
+            ? $existing->traitOrigin
+            : $this->classDef->getNamespacedName(false);
+        if ($existing->valueExpr instanceof Node\Expr && $incoming->valueExpr instanceof Node\Expr) {
+            return $this->traitMemberExpressionsAreIdentical(
+                $existing->valueExpr,
+                $existingOrigin,
+                $incoming->valueExpr,
+                $incomingOrigin,
+                $this->classDef,
+                $existing->type,
+            );
+        }
+
         return $existing->flags === $incoming->flags
             && $existing->type === $incoming->type
             && $existing->class === $incoming->class
             && $existing->value === $incoming->value;
     }
 
-    private function isCompatibleTraitProperty(PropertyDef $existing, PropertyDef $incoming): bool
+    private function isCompatibleTraitProperty(
+        PropertyDef $existing,
+        PropertyDef $incoming,
+        string $incomingOrigin,
+    ): bool
     {
-        return $existing->flags === $incoming->flags
-            && $existing->type === $incoming->type
-            && $existing->class === $incoming->class
-            && $existing->nullable === $incoming->nullable
-            && $existing->default === $incoming->default
-            && $existing->arrayDef == $incoming->arrayDef;
+        if ($existing->flags !== $incoming->flags
+            || $existing->type !== $incoming->type
+            || $existing->class !== $incoming->class
+            || $existing->nullable !== $incoming->nullable
+            || $existing->arrayDef != $incoming->arrayDef
+        ) {
+            return false;
+        }
+
+        $originAttribute = $existing->node?->getAttribute(self::TRAIT_ORIGIN_ATTRIBUTE);
+        $existingOrigin = is_string($originAttribute) && $originAttribute !== ''
+            ? $originAttribute
+            : $this->classDef->getNamespacedName(false);
+        if ($existing->defaultExpr instanceof Node\Expr || $incoming->defaultExpr instanceof Node\Expr) {
+            return $this->traitMemberExpressionsAreIdentical(
+                $existing->defaultExpr instanceof Node\Expr ? $existing->defaultExpr : null,
+                $existingOrigin,
+                $incoming->defaultExpr instanceof Node\Expr ? $incoming->defaultExpr : null,
+                $incomingOrigin,
+                $this->classDef,
+                $existing->type,
+            );
+        }
+
+        return $existing->default === $incoming->default;
     }
 
     private function resolveLateBoundClass(ClassDef $usingClassDef, string $keyword): ?string
