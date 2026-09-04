@@ -156,12 +156,6 @@ trait TypeCheckGenerator
                 $check[] = count($clause) === 1 ? $clause[0] : ['kind' => 'allOf', 'types' => $clause];
             }
         } elseif ($typeNode instanceof IntersectionType) {
-            foreach ($typeNode->types as $subType) {
-                $nameLower = strtolower($this->parseIdentifier($subType));
-                if ($nameLower === 'self' || $nameLower === 'parent' || $nameLower === 'static') {
-                    $this->fatalError($subType, "Type '{$nameLower}' cannot be part of an intersection type");
-                }
-            }
             $clause = $this->buildTypeCheckClause($typeNode);
             if (!empty($clause)) {
                 $check[] = count($clause) === 1 ? $clause[0] : ['kind' => 'allOf', 'types' => $clause];

@@ -1238,6 +1238,50 @@ class Preprocessor extends CompilerBase
         return $functionDef->getNamespacedName();
     }
 
+    /**
+     * self/parent/static in named declarations are resolved against the
+     * lexical class-like scope. Closures are intentionally excluded: PHP lets
+     * an otherwise global closure acquire such a scope through bindTo().
+     */
+    private function validateClassScopeTypeKeywords(?NodeAbstract $type, bool $classScope, bool $hasParent): void
+    {
+        if ($type === null) {
+            return;
+        }
+        if ($type instanceof NullableType) {
+            $this->validateClassScopeTypeKeywords($type->type, $classScope, $hasParent);
+            return;
+        }
+        if ($type instanceof UnionType || $type instanceof IntersectionType) {
+            foreach ($type->types as $member) {
+                $this->validateClassScopeTypeKeywords($member, $classScope, $hasParent);
+            }
+            return;
+        }
+        if (!$type instanceof Node\Name) {
+            return;
+        }
+
+        $name = strtolower($type->toString());
+        if (!in_array($name, ['self', 'parent', 'static'], true)) {
+            return;
+        }
+        if (!$classScope) {
+            $this->fatalError($type, "Cannot use \"{$name}\" when no class scope is active");
+        }
+        if ($name === 'parent' && !$hasParent) {
+            $this->fatalError($type, 'Cannot use "parent" when current class scope has no parent');
+        }
+    }
+
+    private function currentClassScopeHasParent(): bool
+    {
+        // A trait does not know its eventual parent during preprocessing; PHP
+        // therefore permits parent in the trait and validates it when used.
+        return $this->classDef !== null
+            && ($this->classDef->extends !== '' || $this->classDef->trait !== null);
+    }
+
     protected function parseFunctionDecl(Node\Stmt\Function_|Node\Stmt\ClassMethod $v): FunctionDef
     {
         // Local stubs define C++ native functions and require an explicit ABI return type.
@@ -1258,6 +1302,13 @@ class Preprocessor extends CompilerBase
                 and (!$v->returnType instanceof Node\Identifier or strtolower($v->returnType->name) !== 'void')) {
                 $this->fatalError($v, 'Method `' . $methodName . '()` return type must be void when declared');
             }
+        }
+
+        $classScope = $v instanceof Node\Stmt\ClassMethod;
+        $hasParent = $classScope && $this->currentClassScopeHasParent();
+        $this->validateClassScopeTypeKeywords($v->returnType, $classScope, $hasParent);
+        foreach ($v->params as $param) {
+            $this->validateClassScopeTypeKeywords($param->type, $classScope, $hasParent);
         }
 
         $fnName = $this->parseIdentifier($v->name);
@@ -1878,6 +1929,7 @@ class Preprocessor extends CompilerBase
     {
         $this->resetFunction();
         $flags = $this->parseModifiers($v->flags);
+        $this->validateClassScopeTypeKeywords($v->type, true, $this->currentClassScopeHasParent());
         [$declaredType, $class] = $v->type
             ? $this->resolveTypeDecl($v->type, self::DECL_TYPE_OF_CONST)
             : [null, ''];
@@ -2011,6 +2063,7 @@ class Preprocessor extends CompilerBase
                 'Final promoted property must explicitly declare public, protected, or private visibility',
             );
         }
+        $this->validateClassScopeTypeKeywords($typeNode, true, $this->currentClassScopeHasParent());
         $flags = $this->parseModifiers($flags);
         // A `readonly class` marks every property readonly, so the class-level
         // flag participates in the same Zend declaration rules as an explicit
@@ -2926,6 +2979,7 @@ class Preprocessor extends CompilerBase
                         );
                     }
                     if ($stmt->type) {
+                        $this->validateClassScopeTypeKeywords($stmt->type, true, false);
                         [$type, $class] = $this->resolveTypeDecl($stmt->type, self::DECL_TYPE_OF_CONST);
                         if ($this->typeDeclContainsCallable($stmt->type)) {
                             $this->fatalError(
@@ -3062,6 +3116,7 @@ class Preprocessor extends CompilerBase
             }
         }
 
+        $this->validateClassScopeTypeKeywords($property->type, true, false);
         [$type, $class] = $this->resolveTypeDecl($property->type, self::DECL_TYPE_OF_PROPERTY);
         $nullable = $property->type instanceof NullableType;
         foreach ($property->props as $prop) {

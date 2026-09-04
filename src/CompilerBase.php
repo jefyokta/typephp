@@ -82,6 +82,7 @@ use TypePhp\Resolver\PropertyAccessResolver;
 use TypePhp\Resolver\Reflection;
 use TypePhp\Symbol\SymbolRepository;
 use TypePhp\TypeSystem\CompositeTypeCheckerTrait;
+use TypePhp\TypeSystem\CompoundTypeDeclarationValidationTrait;
 use TypePhp\TypeSystem\NativeTypeCompatibilityTrait;
 use TypePhp\NativeClass\NativeClassSupportTrait;
 use TypePhp\NativeClass\NativeGlobalTypeResolver;
@@ -103,6 +104,7 @@ use PhpParser\PrettyPrinter;
 class CompilerBase implements PropertyAccessContext
 {
     use CompositeTypeCheckerTrait;
+    use CompoundTypeDeclarationValidationTrait;
     use CompilerDiagnosticTrait;
     use CompilationStateTrait;
     use NativeTypeCompatibilityTrait;
@@ -1507,11 +1509,22 @@ class CompilerBase implements PropertyAccessContext
     protected function parseImplements(array $implements): array
     {
         $list = [];
+        $seen = [];
         foreach ($implements as $implement) {
             $interfaceName = $this->getNamespacedClassName($this->parseIdentifier($implement));
+            $interfaceNameLower = strtolower($interfaceName);
+            if (isset($seen[$interfaceNameLower])) {
+                $kind = $this->classDef?->enum ? 'Enum' : 'Class';
+                $className = $this->classDef?->getNamespacedName(false) ?? $this->class;
+                $this->fatalError(
+                    $implement,
+                    "{$kind} {$className} cannot implement previously implemented interface {$interfaceName}",
+                );
+            }
+            $seen[$interfaceNameLower] = true;
             $list[] = $interfaceName;
             if (!$this->isInternalInterface($interfaceName)) {
-                $this->symbolCallInFile[$this->file][] = strtolower($interfaceName);
+                $this->symbolCallInFile[$this->file][] = $interfaceNameLower;
             }
         }
         return $list;
