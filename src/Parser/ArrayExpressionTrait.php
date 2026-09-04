@@ -216,17 +216,8 @@ trait ArrayExpressionTrait
                 } else {
                     $this->errorUndefinedVariable($node->var);
                 }
-            } else {
-                $type = $this->getVarType($var);
-                if ($type === Type::BOOL || $type === Type::INT || $type === Type::FLOAT) {
-                    $this->fatalError($node, 'Cannot use [] for numbers');
-                }
             }
-            if ($this->getVarType($var) === Type::STR) {
-                if ($node->dim === null) {
-                    $this->fatalError($node, 'Cannot use [] for strings');
-                }
-            }
+            $this->assertArrayDimVariableTypeIsSupported($node, $var);
         }
 
         if ($node->dim === null) {
@@ -264,6 +255,22 @@ trait ArrayExpressionTrait
                 }
             }
             return $var . '.item(' . $dim . ', ' . $this->escapeBool($write) . ')';
+        }
+    }
+
+    /**
+     * Fixed native scalar variables cannot defer an offset operation to
+     * PHPX. Diagnose them here so invalid TypePHP does not become invalid C++.
+     * A php::Var remains runtime-checked because its value may have changed.
+     */
+    protected function assertArrayDimVariableTypeIsSupported(Expr\ArrayDimFetch $node, string $var): void
+    {
+        $type = $this->getVarType($var);
+        if ($type === Type::BOOL || $type === Type::INT || $type === Type::FLOAT) {
+            $this->fatalError($node, 'Cannot use [] for numbers');
+        }
+        if ($type === Type::STR && $node->dim === null) {
+            $this->fatalError($node, 'Cannot use [] for strings');
         }
     }
 

@@ -666,9 +666,7 @@ trait AssignOpTrait
             return $this->parseAssignPropertyFetch($left, $right, $propertyWriteTarget, $resultUnused);
         } elseif ($this->isArrayDimFetch($left) and $this->isVarExpr($left->var)) {
             $tmp = $this->parseIdentifier($left->var);
-            if ($this->getVarType($tmp) === Type::STR and $left->dim === null) {
-                $this->fatalError($left, 'Cannot use [] for strings');
-            }
+            $this->assertArrayDimVariableTypeIsSupported($left, $tmp);
             if ($this->isStdContainerExpr($left)) {
                 return $this->parseStdContainerAssign($left, $right);
             }
