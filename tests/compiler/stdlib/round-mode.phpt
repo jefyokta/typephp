@@ -7,6 +7,7 @@ function main()
     // A valid legacy mode still produces PHP's result.
     var_dump(round(2.5, 0, PHP_ROUND_HALF_DOWN));
     var_dump(round(3.5, 0, PHP_ROUND_HALF_ODD));
+    var_dump(round(2.5, 0, RoundingMode::HalfEven));
 
     // An out-of-range integer mode must raise ValueError. The Native wrapper
     // calls _php_math_round() directly, where the same value aborts the
@@ -47,6 +48,7 @@ function main()
 --EXPECT--
 float(2)
 float(3)
+float(2)
 caught=round(): Argument #3 ($mode) must be a valid rounding mode (RoundingMode::*)
 caught=round(): Argument #3 ($mode) must be a valid rounding mode (RoundingMode::*)
 caught=round(): Argument #3 ($mode) must be a valid rounding mode (RoundingMode::*)
