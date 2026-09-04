@@ -71,6 +71,16 @@ trait NativeTypeCompatibilityTrait
             return true;
         }
         $classDef = $this->getClass($class);
+        if ($classDef->enum) {
+            if (strcasecmp($expected, 'UnitEnum') === 0) {
+                return true;
+            }
+            if ($classDef->enumBackingType !== null
+                && strcasecmp($expected, 'BackedEnum') === 0
+            ) {
+                return true;
+            }
+        }
         if ($classDef->nativeObject
             && strcasecmp($expected, 'Stringable') === 0
             && $this->findNativeObjectMethod($class, '__toString') !== null

@@ -78,7 +78,22 @@ class Preprocessor extends CompilerBase
      */
     protected function assertEnumMayIncludeMethod(Node $node, string $name): void
     {
-        if (!$this->classDef->enum || !isset(self::ENUM_FORBIDDEN_MAGIC_METHODS[strtolower($name)])) {
+        if (!$this->classDef->enum) {
+            return;
+        }
+
+        $lowerName = strtolower($name);
+        $reserved = $lowerName === 'cases'
+            || ($this->classDef->enumBackingType !== null
+                && ($lowerName === 'from' || $lowerName === 'tryfrom'));
+        if ($reserved) {
+            $this->fatalError(
+                $node,
+                "Cannot redeclare {$this->classDef->getNamespacedName(false)}::{$name}()",
+            );
+        }
+
+        if (!isset(self::ENUM_FORBIDDEN_MAGIC_METHODS[$lowerName])) {
             return;
         }
 
@@ -86,6 +101,38 @@ class Preprocessor extends CompilerBase
             $node,
             "Enum `{$this->classDef->getNamespacedName(false)}` cannot include magic method `{$name}`",
         );
+    }
+
+    /**
+     * UnitEnum and BackedEnum are attached by Zend itself. User declarations
+     * must not attach them a second time. Serializable is likewise forbidden
+     * for enums, including through an intermediate user interface.
+     */
+    private function assertEnumAndUnitEnumInterfaceRules(Node\Stmt\Class_|Node\Stmt\Enum_ $class): void
+    {
+        $className = $this->classDef->getNamespacedName(false);
+        if ($this->classDef->enum) {
+            foreach ($this->classDef->implements as $interface) {
+                if (strcasecmp($interface, 'UnitEnum') === 0
+                    || ($this->classDef->enumBackingType !== null
+                        && strcasecmp($interface, 'BackedEnum') === 0)
+                ) {
+                    $this->fatalError(
+                        $class,
+                        "Enum {$className} cannot implement previously implemented interface {$interface}",
+                    );
+                }
+                if ($this->classDef->enumBackingType === null
+                    && strcasecmp($interface, 'BackedEnum') === 0
+                ) {
+                    $this->fatalError($class, "Non-backed enum {$className} cannot implement interface BackedEnum");
+                }
+            }
+            if ($this->isInheritedFrom($className, 'Serializable')) {
+                $this->fatalError($class, "Enum {$className} cannot implement interface Serializable");
+            }
+            return;
+        }
     }
 
     /**
@@ -1446,16 +1493,20 @@ class Preprocessor extends CompilerBase
         if (isset($this->symbolDeclInFile[$fullClassNameLower])) {
             $this->fatalError($class, "Duplicate class `{$fullClassName}`");
         }
-        // Dynamic properties and readonly semantics are mutually exclusive:
+        // Dynamic properties are forbidden on readonly classes and enums.
         // every property of a readonly class is readonly and declared, so
         // Zend rejects the attribute at compile time.
-        if ($class instanceof Node\Stmt\Class_ && ($flags & Modifiers::READONLY)) {
+        if (($class instanceof Node\Stmt\Class_ && ($flags & Modifiers::READONLY))
+            || $class instanceof Node\Stmt\Enum_
+        ) {
             foreach ($class->attrGroups as $group) {
                 foreach ($group->attrs as $attribute) {
                     if (strcasecmp($this->getResolvedPhpName($attribute->name), 'AllowDynamicProperties') === 0) {
                         $this->fatalError(
                             $attribute,
-                            "Cannot apply #[AllowDynamicProperties] to readonly class `{$fullClassName}`",
+                            $class instanceof Node\Stmt\Enum_
+                                ? "Cannot apply #[AllowDynamicProperties] to enum `{$fullClassName}`"
+                                : "Cannot apply #[AllowDynamicProperties] to readonly class `{$fullClassName}`",
                         );
                     }
                 }
@@ -1506,11 +1557,19 @@ class Preprocessor extends CompilerBase
         if ($class instanceof Node\Stmt\Enum_) {
             $this->classDef->enum = true;
             if ($class->scalarType !== null) {
-                $this->classDef->enumBackingType = $class->scalarType->name;
+                $backingType = strtolower($class->scalarType->name);
+                if ($backingType !== 'int' && $backingType !== 'string') {
+                    $this->fatalError(
+                        $class->scalarType,
+                        "Enum backing type must be int or string, {$class->scalarType->name} given",
+                    );
+                }
+                $this->classDef->enumBackingType = $backingType;
             }
         }
         if (!$class instanceof Node\Stmt\Trait_) {
             $this->classDef->implements = $this->parseImplements($class->implements);
+            $this->assertEnumAndUnitEnumInterfaceRules($class);
         } else {
             $this->classDef->trait = $class;
             // Trait members are compiled later in the consuming class, but
@@ -1575,6 +1634,9 @@ class Preprocessor extends CompilerBase
                 case 'Stmt_ClassConst':
                     break;
                 case 'Stmt_Property':
+                    if ($this->classDef->enum) {
+                        $this->fatalError($v, "Enum {$fullClassName} cannot include properties");
+                    }
                     $this->parseClassPropertyDef($v);
                     break;
                 case 'Stmt_TraitUse':
@@ -2125,7 +2187,7 @@ class Preprocessor extends CompilerBase
         // must not be removed merely because their source syntax resembles a
         // scalar constant expression.
         $type = $this->detectDefaultValueType($default);
-        return $type === null || $type === 'array';
+        return $type === null || $type === 'array' || str_starts_with($type, 'enum:');
     }
 
     /**
@@ -2150,6 +2212,19 @@ class Preprocessor extends CompilerBase
             return;
         }
 
+        if (str_starts_with($valueType, 'enum:')) {
+            $enumClass = substr($valueType, strlen('enum:'));
+            if ($this->propertyTypeAcceptsEnumCase($typeNode, $enumClass)) {
+                return;
+            }
+            $className = $this->getFullClassName();
+            $typeStr = $this->propertyTypeDeclToString($typeNode);
+            $this->fatalError(
+                $errorNode,
+                "Cannot use {$enumClass} as default value for property {$className}::\${$name} of type {$typeStr}",
+            );
+        }
+
         $allowed = $this->collectAllowedDefaultTypes($typeNode);
         if ($allowed === null) {
             // mixed / callable / otherwise unconstrained type declaration.
@@ -2170,8 +2245,9 @@ class Preprocessor extends CompilerBase
 
     /**
      * Determine the PHP value type of a constant expression used as a default
-     * value. Returns one of int/float/string/true/false/array/null, or null when
-     * the type cannot be decided statically.
+     * value. Returns one of int/float/string/true/false/array/null, an
+     * `enum:ClassName` marker, or null when the type cannot be decided
+     * statically.
      */
     protected function detectDefaultValueType(NodeAbstract $node, ?string $scopeClass = null, int $depth = 0): ?string
     {
@@ -2221,6 +2297,9 @@ class Preprocessor extends CompilerBase
                     return null;
                 }
                 $targetDef = $this->getClass($targetClass);
+                if ($targetDef->enum && array_key_exists($constName, $targetDef->enumCases)) {
+                    return 'enum:' . $targetDef->getNamespacedName(false);
+                }
                 if (!$targetDef->hasConstant($constName)) {
                     return null;
                 }
@@ -2250,6 +2329,46 @@ class Preprocessor extends CompilerBase
                     default => null,
                 };
         }
+    }
+
+    private function propertyTypeAcceptsEnumCase(NodeAbstract $typeNode, string $enumClass): bool
+    {
+        if ($typeNode instanceof NullableType) {
+            return $this->propertyTypeAcceptsEnumCase($typeNode->type, $enumClass);
+        }
+        if ($typeNode instanceof UnionType) {
+            foreach ($typeNode->types as $member) {
+                if ($this->propertyTypeAcceptsEnumCase($member, $enumClass)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if ($typeNode instanceof IntersectionType) {
+            foreach ($typeNode->types as $member) {
+                if (!$this->propertyTypeAcceptsEnumCase($member, $enumClass)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        $typeName = $this->parseIdentifier($typeNode);
+        $lower = strtolower($typeName);
+        if ($lower === 'mixed' || $lower === 'any' || $lower === 'object') {
+            return true;
+        }
+        if (isset($this->zendTypeMap[$lower])) {
+            return false;
+        }
+        if ($lower === 'self') {
+            $expected = $this->getFullClassName();
+        } elseif ($lower === 'parent') {
+            $expected = $this->classDef->extends;
+        } else {
+            $expected = $this->getNamespacedClassName($typeName);
+        }
+        return $expected !== '' && $this->isInheritedFrom($enumClass, $expected);
     }
 
     /**

@@ -143,6 +143,64 @@ PHP;
         $compiler->composeTraitDeclarations([$file]);
     }
 
+    /** @dataProvider reservedMethodProvider */
+    public function testEnumCannotRedeclareBuiltinMethod(string $declaration, string $method): void
+    {
+        [$compiler, $file] = $this->compilerFor("<?php\n{$declaration}\nfunction main(): void {}\n");
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage("Cannot redeclare Status::{$method}()");
+        $compiler->prepareFile($file);
+    }
+
+    public static function reservedMethodProvider(): iterable
+    {
+        yield 'cases on pure enum' => [
+            'enum Status { case Active; public static function cases(): array { return []; } }',
+            'cases',
+        ];
+        yield 'from on backed enum' => [
+            'enum Status: string { case Active = "active"; public static function from(string $value): self { return self::Active; } }',
+            'from',
+        ];
+        yield 'tryFrom is case insensitive' => [
+            'enum Status: int { case Active = 1; public static function TRYFROM(int $value): ?self { return null; } }',
+            'TRYFROM',
+        ];
+    }
+
+    public function testPureEnumMayDeclareFromAndTryFrom(): void
+    {
+        [$compiler, $file] = $this->compilerFor(<<<'PHP'
+<?php
+enum Status {
+    case Active;
+    public static function from(string $value): self { return self::Active; }
+    public static function tryFrom(string $value): ?self { return null; }
+}
+function main(): void {}
+PHP);
+        $compiler->prepareFile($file);
+        $compiler->convertFile($file);
+
+        self::assertFileExists($compiler->getCppFile($file));
+    }
+
+    public function testTraitCannotInjectReservedEnumMethod(): void
+    {
+        [$compiler, $file] = $this->compilerFor(<<<'PHP'
+<?php
+trait ListsCases { public static function listAll(): array { return []; } }
+enum Status { use ListsCases { listAll as cases; } case Active; }
+function main(): void {}
+PHP);
+        $compiler->prepareFile($file);
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('Cannot redeclare Status::cases()');
+        $compiler->composeTraitDeclarations([$file]);
+    }
+
     public function testEnumCannotDeclareAbstractMethod(): void
     {
         $source = <<<'PHP'
@@ -246,6 +304,69 @@ PHP;
         $compiler->convertFile($file);
 
         self::assertFileExists($compiler->getCppFile($file));
+    }
+
+    public function testEnumImplicitInterfacesParticipateInTypeCompatibility(): void
+    {
+        [$compiler, $file] = $this->compilerFor(<<<'PHP'
+<?php
+interface PureProvider { public function get(): UnitEnum; }
+interface BackedProvider { public function get(): BackedEnum; }
+enum PureStatus implements PureProvider {
+    case Active;
+    public function get(): self { return self::Active; }
+}
+enum HttpStatus: int implements BackedProvider {
+    case Ok = 200;
+    public function get(): self { return self::Ok; }
+}
+function main(): void {}
+PHP);
+        $compiler->prepareFile($file);
+        $compiler->convertFile($file);
+
+        self::assertFileExists($compiler->getCppFile($file));
+    }
+
+    public function testBuiltinCasesSatisfiesUserInterface(): void
+    {
+        [$compiler, $file] = $this->compilerFor(<<<'PHP'
+<?php
+interface ListsCases { public static function cases(): array; }
+enum Status implements ListsCases { case Active; }
+function main(): void {}
+PHP);
+        $compiler->prepareFile($file);
+        $compiler->convertFile($file);
+
+        self::assertFileExists($compiler->getCppFile($file));
+    }
+
+    /** @dataProvider incompatibleBuiltinContractProvider */
+    public function testBuiltinEnumMethodMustSatisfyInterfaceSignature(string $source, string $method): void
+    {
+        [$compiler, $file] = $this->compilerFor("<?php\n{$source}\nfunction main(): void {}\n");
+        $compiler->prepareFile($file);
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage("Declaration of `Status::{$method}()` must be compatible");
+        $compiler->convertFile($file);
+    }
+
+    public static function incompatibleBuiltinContractProvider(): iterable
+    {
+        yield 'cases has an argument' => [
+            'interface Contract { public static function cases(int $extra): array; } enum Status implements Contract { case Active; }',
+            'cases',
+        ];
+        yield 'cases must be static' => [
+            'interface Contract { public function cases(): array; } enum Status implements Contract { case Active; }',
+            'cases',
+        ];
+        yield 'from cannot accept bool contract' => [
+            'interface Contract { public static function from(bool $value): mixed; } enum Status: int implements Contract { case Active = 1; }',
+            'from',
+        ];
     }
 
     public function testEnumMustImplementInterfaceMethod(): void

@@ -3913,15 +3913,34 @@ class EnumCaseInfo {
     private /* readonly */ string $enumClass;
     private /* readonly */ string $name;
     private /* readonly */ ?Expr $value;
+    /** @var AttributeInfo[] */
+    private /* readonly */ array $attributes;
+    private /* readonly */ ?ExposedDocComment $exposedDocComment;
 
-    public function __construct(string $enumClass, string $name, ?Expr $value) {
+    /** @param AttributeInfo[] $attributes */
+    public function __construct(
+        string $enumClass,
+        string $name,
+        ?Expr $value,
+        array $attributes,
+        ?ExposedDocComment $exposedDocComment,
+    ) {
         $this->enumClass = $enumClass;
         $this->name = $name;
         $this->value = $value;
+        $this->attributes = $attributes;
+        $this->exposedDocComment = $exposedDocComment;
     }
 
-    /** @param array<string, ConstInfo> $allConstInfos */
-    public function getDeclaration(array $allConstInfos): string {
+    /**
+     * @param array<string, ConstInfo> $allConstInfos
+     * @param array<string, string> $declaredStrings
+     */
+    public function getDeclaration(
+        array $allConstInfos,
+        ?int $phpVersionIdMinimumCompatibility,
+        array &$declaredStrings,
+    ): string {
         $escapedName = addslashes($this->name);
         if ($this->value === null) {
             $code = "\n\tzend_enum_add_case_cstr(class_entry, \"$escapedName\", NULL);\n";
@@ -3942,6 +3961,23 @@ class EnumCaseInfo {
             $zvalName = "enum_case_{$escapedName}_value";
             $code = "\n" . $value->initializeZval($zvalName);
             $code .= "\tzend_enum_add_case_cstr(class_entry, \"$escapedName\", &$zvalName);\n";
+        }
+
+        if ($this->attributes !== [] || $this->exposedDocComment !== null) {
+            $id = 'enum_case_' . substr(sha1($this->enumClass . '::' . $this->name), 0, 16);
+            $code .= "\tzend_class_constant *{$id} = (zend_class_constant *) zend_hash_str_find_ptr(&class_entry->constants_table, \"$escapedName\", sizeof(\"$escapedName\") - 1);\n";
+            if ($this->exposedDocComment !== null) {
+                $code .= "\t{$id}->doc_comment = " . $this->exposedDocComment->getInitCode() . "\n";
+            }
+            foreach ($this->attributes as $key => $attribute) {
+                $code .= $attribute->generateCode(
+                    "zend_add_class_constant_attribute(class_entry, {$id}",
+                    "{$id}_{$key}",
+                    $allConstInfos,
+                    $phpVersionIdMinimumCompatibility,
+                    refval($declaredStrings),
+                );
+            }
         }
 
         return $code;
@@ -4213,6 +4249,13 @@ class ClassInfo {
             $backingType = $this->enumBackingType
                 ? $this->enumBackingType->toTypeCode() : "IS_UNDEF";
             $code .= "\tzend_class_entry *class_entry = zend_register_internal_enum(\"$name\", $backingType, $classMethods);\n";
+            // PHP 8.5 installs the enum handlers in
+            // zend_register_internal_enum(). PHP 8.4 does not, which would
+            // otherwise make an internal enum cloneable and give it ordinary
+            // object comparison semantics.
+            $code .= "#if PHP_VERSION_ID < 80500\n";
+            $code .= "\tclass_entry->default_object_handlers = &zend_enum_object_handlers;\n";
+            $code .= "#endif\n";
             if (!$flags->isEmpty()) {
                 // zend_register_internal_enum() has already installed
                 // ZEND_ACC_ENUM. Add TypePHP's implicit FINAL flag without
@@ -4258,8 +4301,13 @@ class ClassInfo {
             static fn (ConstInfo $const): string => $const->getDeclaration($allConstInfos)
         );
 
+        $declaredStrings = [];
         foreach ($this->enumCaseInfos as $enumCase) {
-            $code .= $enumCase->getDeclaration($allConstInfos);
+            $code .= $enumCase->getDeclaration(
+                $allConstInfos,
+                $this->phpVersionIdMinimumCompatibility,
+                refval($declaredStrings),
+            );
         }
 
         foreach ($this->propertyInfos as $property) {
@@ -4289,8 +4337,6 @@ class ClassInfo {
         if ($this->alias) {
             $code .= "\tzend_register_class_alias(\"" . str_replace("\\", "\\\\", $this->alias) . "\", class_entry);\n";
         }
-        $declaredStrings = [];
-
         if (!empty($this->attributes)) {
             foreach ($this->attributes as $key => $attribute) {
                 $code .= $attribute->generateCode(
@@ -5157,7 +5203,12 @@ class FileInfo {
                         );
                     } else if ($classStmt instanceof Stmt\EnumCase) {
                         $enumCaseInfos[] = new EnumCaseInfo(
-                            $className->toString(), $classStmt->name->toString(), $classStmt->expr);
+                            $className->toString(),
+                            $classStmt->name->toString(),
+                            $classStmt->expr,
+                            AttributeInfo::createFromGroups($classStmt->attrGroups),
+                            ExposedDocComment::extractExposedComment($classStmt->getComments()),
+                        );
                     } else if ($classStmt instanceof Stmt\TraitUse) {
                         continue;
                     } else {

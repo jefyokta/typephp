@@ -5601,7 +5601,23 @@ CODE;
     private function checkInterfaceImplementations(Node\Stmt\Class_|Node\Stmt\Enum_ $classStmt): void
     {
         $classDef = $this->classDef;
-        foreach ($this->getClassImplementedInterfaces($classDef) as $interfaceName) {
+        $interfaces = $this->getClassImplementedInterfaces($classDef);
+        foreach ($interfaces as $interfaceName) {
+            if ($classDef->enum && strcasecmp($interfaceName, 'Serializable') === 0) {
+                $this->fatalError(
+                    $classStmt,
+                    "Enum {$classDef->getNamespacedName(false)} cannot implement interface Serializable",
+                );
+            }
+            if (!$classDef->enum
+                && (strcasecmp($interfaceName, 'UnitEnum') === 0
+                    || strcasecmp($interfaceName, 'BackedEnum') === 0)
+            ) {
+                $this->fatalError(
+                    $classStmt,
+                    "Class {$classDef->getNamespacedName(false)} cannot implement interface {$interfaceName}",
+                );
+            }
             $this->checkInterfaceImplementation($classStmt, $classDef, $interfaceName);
         }
     }
@@ -5749,6 +5765,15 @@ CODE;
         foreach ($interfaceDef->methods as $methodName => $interfaceMethodDef) {
             $childMethodDef = $this->findClassMethodDef($classDef, $methodName, $classDef->isAbstract());
             if ($childMethodDef === null) {
+                if ($this->enumProvidesBuiltinMethod($classDef, $methodName)) {
+                    $this->validateBuiltinEnumMethodImplementation(
+                        $node,
+                        $classDef,
+                        $interfaceName,
+                        $interfaceMethodDef,
+                    );
+                    continue;
+                }
                 if ($classDef->isAbstract()) {
                     continue;
                 }
@@ -5953,7 +5978,9 @@ CODE;
         $enumName = $enum->getNamespacedName(false);
         foreach ($enum->abstractMethodDefs as $methodDef) {
             $name = strtolower($methodDef->name);
-            if ($this->findClassMethodDef($enum, $methodDef->name, false) === null) {
+            if (!$this->enumProvidesBuiltinMethod($enum, $methodDef->name)
+                && $this->findClassMethodDef($enum, $methodDef->name, false) === null
+            ) {
                 $requirements[$name] = "{$enumName}::{$methodDef->name}";
             }
         }
@@ -5967,6 +5994,7 @@ CODE;
                 foreach ($interface->getMethods() as $method) {
                     $name = strtolower($method->getName());
                     if (!isset($requirements[$name])
+                        && !$this->enumProvidesBuiltinMethod($enum, $method->getName())
                         && $this->findClassMethodDef($enum, $method->getName(), false) === null
                     ) {
                         $requirements[$name] = $method->getDeclaringClass()->getName() . '::' . $method->getName();
@@ -5980,6 +6008,7 @@ CODE;
             foreach ($this->getInterface($interfaceName)->methods as $methodDef) {
                 $name = strtolower($methodDef->name);
                 if (!isset($requirements[$name])
+                    && !$this->enumProvidesBuiltinMethod($enum, $methodDef->name)
                     && $this->findClassMethodDef($enum, $methodDef->name, false) === null
                 ) {
                     $requirements[$name] = "{$interfaceName}::{$methodDef->name}";
@@ -5988,6 +6017,80 @@ CODE;
         }
 
         return array_values($requirements);
+    }
+
+    private function enumProvidesBuiltinMethod(ClassDef $enum, string $methodName): bool
+    {
+        if (!$enum->enum) {
+            return false;
+        }
+        $methodName = strtolower($methodName);
+        return $methodName === 'cases'
+            || ($enum->enumBackingType !== null
+                && ($methodName === 'from' || $methodName === 'tryfrom'));
+    }
+
+    private function validateBuiltinEnumMethodImplementation(
+        NodeAbstract $node,
+        ClassDef $enum,
+        string $interfaceName,
+        MethodDef $contract,
+    ): void {
+        $function = $contract->functionDef;
+        if ($function === null) {
+            return;
+        }
+
+        $methodName = strtolower($contract->name);
+        $parameterTypes = $methodName === 'cases'
+            ? []
+            : [[['kind' => 'isInt'], ['kind' => 'isString']]];
+        $required = $methodName === 'cases' ? 0 : 1;
+        $incompatible = !($contract->flags & Modifiers::STATIC)
+            || $function->returnsByRef
+            || $function->hasVariadicArg()
+            || $function->argCountRequired < $required
+            || count($function->argInfoList) > count($parameterTypes);
+
+        foreach ($function->argInfoList as $index => $argument) {
+            if (!isset($parameterTypes[$index])) {
+                $incompatible = true;
+                break;
+            }
+            $accepted = $this->getParameterAcceptedTypes($argument);
+            if ($accepted === null
+                || !$this->isAcceptedTypeSubset($accepted, $parameterTypes[$index])
+                || $argument->byRef
+            ) {
+                $incompatible = true;
+                break;
+            }
+        }
+
+        if (!$function->returnTypeUndeclared) {
+            $builtinReturns = $methodName === 'cases'
+                ? [['kind' => 'isArray']]
+                : [['kind' => 'isStatic', 'class' => $enum->getNamespacedName(false)]];
+            if ($methodName === 'tryfrom') {
+                $builtinReturns[] = ['kind' => 'isNull'];
+            }
+            $contractReturns = $this->getReturnAcceptedTypes($function, $interfaceName);
+            foreach ($builtinReturns as $builtinReturn) {
+                if (!$this->isReturnTypeCoveredBy($builtinReturn, $contractReturns)) {
+                    $incompatible = true;
+                    break;
+                }
+            }
+        }
+
+        if ($incompatible) {
+            $this->fatalMethodOverrideIncompatible(
+                $node,
+                $enum->getNamespacedName(false),
+                $contract->name,
+                $interfaceName,
+            );
+        }
     }
 
     private function getVisibilityRank(int $flags): int
@@ -6662,6 +6765,12 @@ CODE;
                 $classDef->constants[$const->name] = $const;
             }
             foreach ($traitDef->properties as $prop) {
+                if ($classDef->enum) {
+                    $this->fatalError(
+                        $v,
+                        "Enum {$classDef->getNamespacedName(false)} cannot include properties",
+                    );
+                }
                 if ($classDef->hasProperty($prop->name)) {
                     if (!$this->isCompatibleTraitProperty($classDef->getProperty($prop->name), $prop)) {
                         $this->fatalError($v, "Trait `{$traitFullName}` property `{$prop->name}` conflicts with class `{$classDef->getNamespacedName(false)}`");
@@ -6707,6 +6816,12 @@ CODE;
                     }
                 }
             } elseif ($stmt instanceof Node\Stmt\Property) {
+                if ($this->classDef->enum) {
+                    $this->fatalError(
+                        $stmt,
+                        "Enum {$this->classDef->getNamespacedName(false)} cannot include properties",
+                    );
+                }
                 foreach ($stmt->props as $prop) {
                     if (!$this->classDef->hasProperty($prop->name->toString())) {
                         $origin = $stmt->getAttribute(self::TRAIT_ORIGIN_ATTRIBUTE);

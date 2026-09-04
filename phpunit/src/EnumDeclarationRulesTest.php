@@ -195,6 +195,156 @@ PHP);
         $compiler->convertFile($file);
     }
 
+    public function testEnumCannotDeclareProperty(): void
+    {
+        $compiler = $this->compilerFor(<<<'PHP'
+<?php
+enum Suit { case Hearts; public string $label; }
+function main(): void {}
+PHP);
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('Enum Suit cannot include properties');
+        $compiler->prepareFile($this->testRoot . '/program.php');
+    }
+
+    public function testEnumCannotImportTraitProperty(): void
+    {
+        $compiler = $this->compilerFor(<<<'PHP'
+<?php
+trait HasLabel { public string $label; }
+enum Suit { use HasLabel; case Hearts; }
+function main(): void {}
+PHP);
+        $file = $this->testRoot . '/program.php';
+        $compiler->prepareFile($file);
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('Enum Suit cannot include properties');
+        $compiler->composeTraitDeclarations([$file]);
+    }
+
+    public function testEnumBackingTypeMustBeIntOrString(): void
+    {
+        $compiler = $this->compilerFor(<<<'PHP'
+<?php
+enum Flag: bool { case Enabled = true; }
+function main(): void {}
+PHP);
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('Enum backing type must be int or string, bool given');
+        $compiler->prepareFile($this->testRoot . '/program.php');
+    }
+
+    public function testAllowDynamicPropertiesCannotBeAppliedToEnum(): void
+    {
+        $compiler = $this->compilerFor(<<<'PHP'
+<?php
+#[AllowDynamicProperties]
+enum Suit { case Hearts; }
+function main(): void {}
+PHP);
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('Cannot apply #[AllowDynamicProperties] to enum `Suit`');
+        $compiler->prepareFile($this->testRoot . '/program.php');
+    }
+
+    /** @dataProvider forbiddenEnumInterfaceProvider */
+    public function testEnumCannotExplicitlyImplementReservedInterface(
+        string $declaration,
+        string $message,
+    ): void {
+        $compiler = $this->compilerFor("<?php\n{$declaration}\nfunction main(): void {}\n");
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage($message);
+        $compiler->prepareFile($this->testRoot . '/program.php');
+    }
+
+    public static function forbiddenEnumInterfaceProvider(): iterable
+    {
+        yield 'pure UnitEnum' => [
+            'enum Suit implements UnitEnum { case Hearts; }',
+            'Enum Suit cannot implement previously implemented interface UnitEnum',
+        ];
+        yield 'pure BackedEnum' => [
+            'enum Suit implements BackedEnum { case Hearts; }',
+            'Non-backed enum Suit cannot implement interface BackedEnum',
+        ];
+        yield 'backed BackedEnum' => [
+            'enum Suit: string implements BackedEnum { case Hearts = "hearts"; }',
+            'Enum Suit cannot implement previously implemented interface BackedEnum',
+        ];
+        yield 'Serializable' => [
+            'enum Suit implements Serializable { case Hearts; public function serialize(): string { return ""; } public function unserialize(string $data): void {} }',
+            'Enum Suit cannot implement interface Serializable',
+        ];
+    }
+
+    public function testEnumCannotImplementSerializableTransitively(): void
+    {
+        $compiler = $this->compilerFor(<<<'PHP'
+<?php
+interface LegacySerializable extends Serializable {}
+enum Suit implements LegacySerializable {
+    case Hearts;
+    public function serialize(): string { return ''; }
+    public function unserialize(string $data): void {}
+}
+function main(): void {}
+PHP);
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('Enum Suit cannot implement interface Serializable');
+        $compiler->prepareFile($this->testRoot . '/program.php');
+    }
+
+    public function testOrdinaryClassCannotImplementUnitEnum(): void
+    {
+        $compiler = $this->compilerFor(<<<'PHP'
+<?php
+class FakeEnum implements UnitEnum { public static function cases(): array { return []; } }
+function main(): void {}
+PHP);
+        $file = $this->testRoot . '/program.php';
+        $compiler->prepareFile($file);
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('Class FakeEnum cannot implement interface UnitEnum');
+        $compiler->convertFile($file);
+    }
+
+    public function testEnumCaseCannotInitializeScalarTypedProperty(): void
+    {
+        $compiler = $this->compilerFor(<<<'PHP'
+<?php
+enum Code: int { case Ok = 200; }
+class Response { public int $code = Code::Ok; }
+function main(): void {}
+PHP);
+
+        $this->expectException(TestError::class);
+        $this->expectExceptionMessage('Cannot use Code as default value for property Response::$code of type int');
+        $compiler->prepareFile($this->testRoot . '/program.php');
+    }
+
+    public function testEnumCaseMayInitializeCompatibleObjectProperty(): void
+    {
+        $compiler = $this->compilerFor(<<<'PHP'
+<?php
+enum Code: int { case Ok = 200; }
+class Response { public UnitEnum|Code $code = Code::Ok; }
+function main(): void {}
+PHP);
+        $file = $this->testRoot . '/program.php';
+        $compiler->prepareFile($file);
+        $compiler->convertFile($file);
+
+        self::assertFileExists($compiler->getCppFile($file));
+    }
+
     private function compilerFor(string $source): CompilerTest
     {
         $file = $this->testRoot . '/program.php';
