@@ -214,10 +214,17 @@ trait FunctionCallTrait
             $name = '';
         }
         if (empty($expr->args)) {
+            if ($name === '' && $runtimeCallScope === null) {
+                return 'typephp_call_cached(' . $fn . ', ' . $this->getFunctionCallCache() . ')';
+            }
             $scopeArg = $runtimeCallScope === null ? '' : $runtimeCallScope . ', ';
             return 'php::call(' . $scopeArg . $fn . ')';
         }
         try {
+            if ($name === '' && $runtimeCallScope === null) {
+                return 'typephp_call_cached(' . $fn . ', ' . $this->getFunctionCallCache() . ', '
+                    . $this->parseCallArgs($expr->args) . ')';
+            }
             return $this->genRuntimeFunctionCall(
                 $fn,
                 $expr->args,

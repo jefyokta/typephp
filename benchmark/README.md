@@ -9,6 +9,8 @@ machine instead of committing absolute timing expectations.
   from `examples/`.
 - `bridge/` measures calls, property operations, and container operations that
   cross the generated-code/PHPX/Zend boundary.
+- `dynamic-call/` measures monomorphic and polymorphic runtime callables so
+  call-site cache changes can be evaluated independently from direct AOT calls.
 - `property-access/` builds and compares dynamic/static property access under
   Zend PHP and TypePHP.
 

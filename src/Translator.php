@@ -903,6 +903,8 @@ class Translator extends Preprocessor
         $lines[] = 'enum class PersistentFuncId : uint32_t {};';
         $lines[] = 'enum class PersistentPropertyId : uint32_t {};';
         $lines[] = 'enum class PropertyCacheId : uint32_t {};' . PHP_EOL;
+        $lines[] = 'enum class MethodCallCacheId : uint32_t {};' . PHP_EOL;
+        $lines[] = 'enum class FunctionCallCacheId : uint32_t {};' . PHP_EOL;
 
         $lines[] = 'zend_class_entry *get_class(RequestClassId class_id, const php::Str &class_name);';
         $lines[] = 'zend_function *get_func(RequestFuncId func_id, const php::Str &func_name);';
@@ -912,6 +914,8 @@ class Translator extends Preprocessor
         $lines[] = 'zend_function *get_persistent_method(PersistentFuncId func_id, const php::Str &method_name, PersistentClassId class_id, const php::Str &class_name);';
         $lines[] = 'uint32_t get_persistent_prop(PersistentPropertyId prop_id, const php::Str &prop_name, const php::Str &class_name);' . PHP_EOL;
         $lines[] = 'php::PropertyCacheSlot &get_property_cache(PropertyCacheId cache_id);' . PHP_EOL;
+        $lines[] = 'php::MethodCallCacheSlot &typephp_get_method_call_cache(MethodCallCacheId cache_id);' . PHP_EOL;
+        $lines[] = 'php::FunctionCallCacheSlot &typephp_get_function_call_cache(FunctionCallCacheId cache_id);' . PHP_EOL;
 
         foreach ($this->getClassLikesWithConstants() as $classDef) {
             foreach ($classDef->constants as $constant) {
@@ -1060,6 +1064,10 @@ class Translator extends Preprocessor
             . max(1, count($this->funcMap)) . ']{};' . PHP_EOL;
         $code .= $this->getIndent() . 'php::PropertyCacheSlot property_cache_map['
             . max(1, $this->propertyAccessCacheIndex) . ']{};' . PHP_EOL;
+        $code .= $this->getIndent() . 'php::MethodCallCacheSlot method_call_cache_map['
+            . max(1, $this->methodCallCacheIndex) . ']{};' . PHP_EOL;
+        $code .= $this->getIndent() . 'php::FunctionCallCacheSlot function_call_cache_map['
+            . max(1, $this->functionCallCacheIndex) . ']{};' . PHP_EOL;
         $code .= '};' . PHP_EOL;
         $code .= 'static THREAD_LOCAL php_request_cache_storage *php_request_cache = nullptr;' . PHP_EOL;
 
@@ -1141,6 +1149,14 @@ uint32_t get_persistent_prop(PersistentPropertyId prop_id, const php::Str &prop_
 
 php::PropertyCacheSlot &get_property_cache(PropertyCacheId cache_id) {
     return php_request_cache->property_cache_map[static_cast<uint32_t>(cache_id)];
+}
+
+php::MethodCallCacheSlot &typephp_get_method_call_cache(MethodCallCacheId cache_id) {
+    return php_request_cache->method_call_cache_map[static_cast<uint32_t>(cache_id)];
+}
+
+php::FunctionCallCacheSlot &typephp_get_function_call_cache(FunctionCallCacheId cache_id) {
+    return php_request_cache->function_call_cache_map[static_cast<uint32_t>(cache_id)];
 }
 CODE;
         $code .= "\n\n";
@@ -1512,9 +1528,9 @@ CODE;
 
         $code .= <<<CODE
 PHP_RSHUTDOWN_FUNCTION({$moduleName}) {
+    php::request_shutdown();
     delete php_request_cache;
     php_request_cache = nullptr;
-    php::request_shutdown();
     module_clean();
     return SUCCESS;
 }

@@ -340,6 +340,8 @@ class CompilerBase implements PropertyAccessContext
      * cache a runtime class together with a dynamic/hooked-property sentinel.
      */
     protected int $propertyAccessCacheIndex = 0;
+    protected int $methodCallCacheIndex = 0;
+    protected int $functionCallCacheIndex = 0;
     /** @var array<string, array<Node\Stmt>> Prepared declaration ASTs keyed by real path. */
     protected array $preparedFileAsts = [];
     protected bool $traitDeclarationsComposed = false;
@@ -1309,6 +1311,20 @@ class CompilerBase implements PropertyAccessContext
         $this->assertCompilerPhase(self::PHASE_CONVERT, 'property access cache ID allocation');
         $id = $this->propertyAccessCacheIndex++;
         return 'get_property_cache(PropertyCacheId{' . $id . '})';
+    }
+
+    protected function getMethodCallCache(): string
+    {
+        $this->assertCompilerPhase(self::PHASE_CONVERT, 'method call cache ID allocation');
+        $id = $this->methodCallCacheIndex++;
+        return 'typephp_get_method_call_cache(MethodCallCacheId{' . $id . '})';
+    }
+
+    protected function getFunctionCallCache(): string
+    {
+        $this->assertCompilerPhase(self::PHASE_CONVERT, 'function call cache ID allocation');
+        $id = $this->functionCallCacheIndex++;
+        return 'typephp_get_function_call_cache(FunctionCallCacheId{' . $id . '})';
     }
 
     protected function getClassEntryPtr(string $className): string

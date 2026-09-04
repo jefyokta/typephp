@@ -1287,9 +1287,9 @@ YAML);
             $this->assertStringNotContainsString('slot.reset()', $moduleInit, $mode);
             $this->assertMatchesRegularExpression(
                 '/PHP_RSHUTDOWN_FUNCTION\([^)]*\)\s*\{\s*'
+                    . 'php::request_shutdown\(\);\s*'
                     . 'delete php_request_cache;\s*'
-                    . 'php_request_cache = nullptr;\s*'
-                    . 'php::request_shutdown\(\);/s',
+                    . 'php_request_cache = nullptr;/s',
                 $extension,
                 $mode,
             );

@@ -857,10 +857,18 @@ trait MethodCallTrait
             if ($requiresDynamicScope && $this->methodDef) {
                 return 'php::callScoped(' . $object . ', ' . $methodPtr . ', ' . $this->getCallableScopeExpr() . ')';
             }
+            if (!$this->isNamedMethod($expr->name)) {
+                return 'typephp_call_method_cached(' . $object . ', ' . $methodPtr . ', '
+                    . $this->getMethodCallCache() . ')';
+            }
             return $object . '.call(' . $methodPtr . ')';
         }
         try {
             $class = empty($class) ? self::DYNAMIC_CALLED_CLASS : $class;
+            if (!$this->isNamedMethod($expr->name) && !($requiresDynamicScope && $this->methodDef)) {
+                return 'typephp_call_method_cached(' . $object . ', ' . $methodPtr . ', '
+                    . $this->getMethodCallCache() . ', ' . $this->parseCallArgs($expr->args) . ')';
+            }
             return $this->genRuntimeObjectMethodCall(
                 $object,
                 $methodPtr,
