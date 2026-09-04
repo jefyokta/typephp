@@ -85,6 +85,14 @@ trait LoopControlTrait
 
         $list_loop = [];
         foreach ($loop as $expr) {
+            // for-loop post-expressions discard return value, so $i++ ≡ ++$i.
+            // Only rewrite simple variables; TypePHP lowers prefix and postfix
+            // differently for compound lvalues (e.g. static-property write-back).
+            if ($expr instanceof Node\Expr\PostInc && $this->isVarExpr($expr->var)) {
+                $expr = new Node\Expr\PreInc($expr->var, $expr->getAttributes());
+            } elseif ($expr instanceof Node\Expr\PostDec && $this->isVarExpr($expr->var)) {
+                $expr = new Node\Expr\PreDec($expr->var, $expr->getAttributes());
+            }
             [$loopExpr, $beforeStmts, $afterStmts] = $this->parseExprWithCapturedStmts($expr);
             $loopExpr = $this->stringifyParsedExpr($loopExpr);
             if ($beforeStmts || $afterStmts) {
