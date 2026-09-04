@@ -232,6 +232,12 @@ class Constants
             'required'    => false,
             'defaultValue' => '',
         ],
+        'compiler' => [
+            'longPrefix'  => 'compiler',
+            'description' => 'C++ compiler command to use (e.g. --compiler=/usr/bin/clang)',
+            'required'    => false,
+            'defaultValue' => '',
+        ],
         'target-platform' => [
             'longPrefix'  => 'target-platform',
             'description' => 'Cross-compilation target triple (e.g. aarch64-linux-gnu, x86_64-w64-mingw32)',

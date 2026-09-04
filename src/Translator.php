@@ -214,20 +214,21 @@ class Translator extends Preprocessor
             } else {
                 $this->platform = PlatformFactory::create();
             }
+            // --compiler wins over the platform default; WASI keeps its own
+            // default because that platform also drives --sysroot and friends.
             $this->cppCompiler = $this->platform instanceof Wasi
                 ? $this->platform->getDefaultCompiler()
-                : CompilerFactory::detectCompilerName($this->platform);
+                : CompilerFactory::detectCompilerName($this->platform, $this->getCommandLineCompiler());
 
             // --full-static: libphp.a embeds musl libc, so the link must produce a
             // musl binary. That is driven by clang's --target=<arch>-unknown-linux-musl
             // plus -static -B <musl dir>, which gcc does not accept; a glibc link
             // would let musl's __libc_start_main install a thread pointer whose
             // layout does not match the linker's TLS offsets, corrupting every
-            // thread-local read in PHP's ZTS globals. PHPX_CC/CXX take precedence,
-            // otherwise fall back to clang.
+            // thread-local read in PHP's ZTS globals.
             if ($this->climate->arguments->defined('full-static')) {
                 $this->fullStatic = true;
-                $this->cppCompiler = getenv('PHPX_CC') ?: (getenv('CXX') ?: 'clang');
+                $this->cppCompiler = $this->detectFullStaticCompiler();
             }
 
             if ($this->platform instanceof Windows) {
@@ -257,6 +258,54 @@ class Translator extends Preprocessor
         } catch (\Throwable $e) {
             $this->error($e->getMessage());
         }
+    }
+
+    /**
+     * The compiler requested with --compiler, or '' when the flag was not given.
+     */
+    protected function getCommandLineCompiler(): string
+    {
+        if (!$this->climate->arguments->defined('compiler')) {
+            return '';
+        }
+        return trim((string) $this->climate->arguments->get('compiler'));
+    }
+
+    /**
+     * Resolve a compiler able to build the fully-static musl target.
+     *
+     * Only a native clang can drive --target=<arch>-unknown-linux-musl, so the
+     * platform default (g++ on Linux) is never usable. --compiler is honoured
+     * but never silently replaced; otherwise PATH's first clang is tried and a
+     * standard location is used as a fallback — a wasm-only clang such as
+     * wasi-sdk sits first on PATH in this project and would otherwise fail
+     * halfway through the build with an opaque "no available targets" error.
+     */
+    protected function detectFullStaticCompiler(): string
+    {
+        $target = $this->getFullStaticTargetTriple();
+
+        $explicit = $this->getCommandLineCompiler();
+        if ($explicit !== '') {
+            if (!CompilerFactory::supportsTarget($explicit, $target)) {
+                $this->error(
+                    "--full-static requires a clang that can target {$target}, but {$explicit} cannot.\n"
+                    . "  Pass a native clang, for example: --compiler=/usr/bin/clang"
+                );
+            }
+            return $explicit;
+        }
+
+        foreach (['clang', '/usr/bin/clang'] as $candidate) {
+            if (CompilerFactory::supportsTarget($candidate, $target)) {
+                return $candidate;
+            }
+        }
+
+        $this->error(
+            "--full-static requires a clang that can target {$target}; none was found.\n"
+            . "  Install clang, or pass it explicitly, for example: --compiler=/usr/bin/clang"
+        );
     }
 
     public function parseArgv(array $argv)
@@ -312,6 +361,7 @@ class Translator extends Preprocessor
         $climate->tab()->out('-r, --run           Run the compiled binary after build');
         $climate->tab()->out('-j, --job <num>      Number of parallel compilation jobs (default: 4)');
         $climate->tab()->out('--cxx-std <ver>      C++ standard version (c++17, c++20, etc., default: c++17)');
+        $climate->tab()->out('--compiler <cmd>     C++ compiler command to use (e.g. --compiler=/usr/bin/clang)');
         $climate->tab()->out('--march <arch>       Target CPU instruction set (e.g. native, x86-64-v3, armv8-a)');
         $climate->tab()->out('--target-platform <triple> Cross-compilation target triple (e.g. aarch64-linux-gnu)');
         $climate->tab()->out('--wasm[=profile]     Build WASI component (default) or browser output');
@@ -332,6 +382,7 @@ class Translator extends Preprocessor
         $climate->tab()->out('--format             Enable clang-format code formatting (disabled by default)');
         $climate->tab()->out('-l, --link-lib <lib> Link against a library (repeatable, e.g. -lcurl)');
         $climate->tab()->out('-L, --link-path <dir> Add a library search path (repeatable, e.g. -L/usr/local/lib)');
+        $climate->tab()->out('--full-static        Link fully statically against the bundled SDK (phpx/full-static/sdk)');
         $climate->br();
     }
 
@@ -351,6 +402,16 @@ class Translator extends Preprocessor
         // Build mode
         if ($this->climate->arguments->defined('mode')) {
             $this->setBuildMode($this->climate->arguments->get('mode'));
+        }
+
+        // --full-static links the whole musl C runtime into the artifact, so it
+        // only makes sense for a self-contained executable. A shared object
+        // would drag a second, incompatible libc into the host process.
+        if ($this->fullStatic && !$this->isBuildModeBin()) {
+            $this->error(
+                '--full-static is only supported in bin mode (-m bin); '
+                . 'shared libraries and extensions cannot embed a C runtime.'
+            );
         }
 
         // Debug line number

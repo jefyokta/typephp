@@ -175,7 +175,7 @@ trait SourcePipelineTrait
             $this->error(
                 "C/C++ compiler executable not found: {$program}\n" .
                 "Configured compiler command: {$compilerCommand}\n" .
-                "Install a supported compiler or set `cpp-compiler` in project.yml / PHPX_CC / CXX."
+                "Install a supported compiler, or select one with --compiler, or set `cpp-compiler` in project.yml."
             );
         }
 

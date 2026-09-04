@@ -57,41 +57,20 @@ trait NativeBuildConfigurationTrait
      * thread-local read (ZTS globals, and PHP's ZEND_TLS data) lands on the
      * wrong address and the process crashes during php_module_startup.
      *
-     * Resolution order: PHPX_MUSL_LIB_DIR, the bundled SDK, then the usual
-     * system locations.
+     * The startup files ship with the SDK, at phpx/full-static/sdk/lib/musl.
      */
     protected function getFullStaticMuslDir(): string
     {
         $sdkDir = $this->getFullStaticSdkDir();
-        $arch = explode('-', $this->getFullStaticTargetTriple())[0];
-
-        $candidates = [];
-        $env = getenv('PHPX_MUSL_LIB_DIR');
-        if (is_string($env) && $env !== '') {
-            $candidates[] = $env;
+        $muslDir = $sdkDir . '/lib/musl';
+        if (!is_file($muslDir . '/crt1.o')) {
+            $this->error(
+                "--full-static requires the musl startup files bundled with the SDK;\n"
+                . "  crt1.o not found at: {$muslDir}\n"
+                . '  Rebuild the SDK with sapi/scripts/build-sdk.sh, which now copies them there.'
+            );
         }
-        if ($sdkDir !== null) {
-            $candidates[] = $sdkDir . '/lib/musl';
-        }
-        // Alpine and other musl-native systems keep the startup files in /usr/lib
-        $candidates[] = '/usr/lib/' . $arch . '-linux-musl';
-        $candidates[] = '/usr/lib/' . $arch . '-alpine-linux-musl';
-        $candidates[] = '/usr/lib/musl';
-        $candidates[] = '/usr/local/musl/lib';
-        $candidates[] = '/usr/lib';
-
-        foreach ($candidates as $dir) {
-            if (is_file($dir . '/crt1.o')) {
-                return $dir;
-            }
-        }
-
-        $this->error(
-            "--full-static requires musl startup files (crt1.o).\n"
-            . "  Looked in: " . implode(', ', $candidates) . "\n"
-            . "  Install musl (e.g. 'apt install musl-dev'), or copy crt1.o/crti.o/crtn.o from the\n"
-            . '  swoole-cli build container into ' . ($sdkDir ?? '<sdk>') . "/lib/musl, or set PHPX_MUSL_LIB_DIR."
-        );
+        return $muslDir;
     }
 
     protected function getIncludePaths(): array
@@ -226,6 +205,14 @@ trait NativeBuildConfigurationTrait
             $libraries[] = 'gmp';
             $libraries[] = 'gmpxx';
             $libraries[] = 'mpfr';
+            // The C++ runtime has to be requested explicitly: libphp.so carries
+            // none, and a C driver (clang) does not add it the way g++/clang++
+            // do. WASI needs nothing — its toolchain supplies the runtime.
+            if ($this->isLinux()) {
+                $libraries[] = 'stdc++';
+            } elseif ($this->isMacos()) {
+                $libraries[] = 'c++';
+            }
         }
 
         return $libraries;

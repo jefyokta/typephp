@@ -33,27 +33,11 @@ class CompilerFactory
     }
 
     /**
-     * Resolve the compiler command based on configuration, environment variables, and platform defaults.
+     * Resolve the compiler command from an explicit selection, falling back to the platform default.
      */
     public static function detectCompilerName(PlatformBase $platform, string $configuredCompiler = ''): string
     {
-        if ($configuredCompiler !== '') {
-            return $configuredCompiler;
-        }
-
-        $compilerEnv = getenv('PHPX_CC');
-        if ($compilerEnv) {
-            return $compilerEnv;
-        }
-
-        if (!$platform instanceof Windows) {
-            $cxxEnv = getenv('CXX');
-            if ($cxxEnv) {
-                return $cxxEnv;
-            }
-        }
-
-        return $platform->getDefaultCompiler();
+        return $configuredCompiler !== '' ? $configuredCompiler : $platform->getDefaultCompiler();
     }
 
     /**
@@ -148,6 +132,47 @@ class CompilerFactory
         }
 
         return false;
+    }
+
+    /**
+     * Whether a compiler can actually build code for the given target triple.
+     *
+     * gcc rejects --target outright, and a wasm-only clang (wasi-sdk is often
+     * first on PATH in this project) accepts the flag but only fails once it
+     * has to create a target machine, so the probe must reach code generation.
+     */
+    public static function supportsTarget(string $compilerName, string $target): bool
+    {
+        if (!self::isCommandExecutable($compilerName)) {
+            return false;
+        }
+
+        $token = @tempnam(sys_get_temp_dir(), 'tpc_target_probe');
+        if ($token === false) {
+            return false;
+        }
+        $source = $token . '.c';
+        $object = $token . '.o';
+        if (@file_put_contents($source, "int main(void) { return 0; }\n") === false) {
+            @unlink($token);
+            return false;
+        }
+
+        $nullDevice = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
+        $command = escapeshellcmd($compilerName)
+            . ' ' . escapeshellarg('--target=' . $target)
+            . ' -c ' . escapeshellarg($source)
+            . ' -o ' . escapeshellarg($object)
+            . ' >' . $nullDevice . ' 2>&1';
+
+        $status = 0;
+        @exec($command, $output, $status);
+
+        @unlink($source);
+        @unlink($object);
+        @unlink($token);
+
+        return $status === 0;
     }
 
     public static function getCommandProgram(string $command): string
